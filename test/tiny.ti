@@ -1,0 +1,8 @@
+
+
+def (ext lst) [1 lst... 2 lst... 3]
+
+def (main)
+  (debug_print (write (ext [5 (ext [6 6])... 7])))
+
+

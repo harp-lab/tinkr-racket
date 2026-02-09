@@ -1,0 +1,33 @@
+
+
+blessed (sum_loop n acc)
+{
+  ;; Loop condition: if n <= 0, return accumulator
+  if (s64lte n 0) return acc
+  
+  {
+    ;; 1. Calculate new arguments
+    dec_n = (s64minus n 1)
+    inc_acc = (s64plus acc n)
+
+    ;; 2. The explicit tail-call idiom you requested:
+    ;;    Bind result to a var, then return the var.
+    ;;    Your simplifier must turn this into `musttail return sum_loop(...)`
+    recurse = (sum_loop dec_n inc_acc)
+    
+    return recurse
+  }
+}
+
+blessed (entry_point)
+{
+  ;; Sum numbers from 1,000,000 down to 0
+  ;; Expected result: 500000500000 (roughly, for n=1m)
+  ;; Actually sum of 1..N is N*(N+1)/2. 
+  ;; 1000000 * 1000001 / 2 = 500000500000
+  
+  x = (sum_loop (s64_t 1000000) (s64_t 0))
+  return x
+}
+
+

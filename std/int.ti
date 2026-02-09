@@ -1,0 +1,382 @@
+
+
+
+bless ("#include <gmp.h>")
+
+
+
+;; Some macros
+
+
+blessed (mpz_t x) (_t "mpz_t*" x)
+blessed (mpz_ref x) (deref (mpz_t x))
+
+blessed (to_s56 x) (s64rshift (bitcast "s64" x) 8)
+blessed (to_u56 x) (u64rshift x 8)
+
+blessed (fits_s56 v128)
+  (u64bit_or (lt v128 (s128_t (s64minus 0 (s64lshift 1 55))))
+	     (lt (s128_t (s64minus (s64lshift 1 55) 1)) v128))
+
+
+
+;; Basic subword (u56) semantics
+
+
+def (write `[[_subword ,bits]]) (bless (write_subword bits))
+
+blessed (write_subword bits)
+{
+  !s = (alloc_bytes 26)
+  do (call_4 snprintf (cstr_t s) 26 "\"[[%lx]]\"" (unbox_subword bits))
+  return s
+}
+
+def (+ `[[_subword ,z0]] `[[_subword ,z1]])
+  `[[_subword ,(bless (lshift (plus (to_u56 z0) (to_u56 z1)) 8))]]
+
+def (- `[[_subword ,z0]] `[[_subword ,z1]])
+  `[[_subword ,(bless (lshift (minus (to_u56 z0) (to_u56 z1)) 8))]]
+
+
+
+
+def (= `[[_subword ,x]] `[[_subword ,y]]) (bless (equal x y))
+
+
+
+
+;; Basic fixed 56-bit signed int semantics
+
+
+def (write `[[signed ,z]])
+  (_init_from_cstr none (bless (write_signed z)))
+
+blessed (write_signed z)
+{
+  !s = (alloc_bytes 22)
+  do (call_4 snprintf (cstr_t s) 22 "\"%ld\"" (to_s56 z))
+  return s
+}
+
+blessed (to_s56 x) (s64rshift (bitcast "s64" x) 8)
+
+def (+ `[[signed ,x]] `[[signed ,y]])
+  `[[signed ,(bless (s64plus (to_s56 x) (to_s56 y)))]]
+def (- `[[signed ,x]] `[[signed ,y]])
+  `[[signed ,(bless (s64minus (to_s56 x) (to_s56 y)))]]
+
+
+
+def `[[signed ,x]] = `[[signed ,y]] (bless (equal x y))
+
+
+
+
+
+
+
+
+;; Auto-expanding fixed int semantics
+
+
+def (_init_from_s64 _ z)
+  `[[small ,(bless (s64lshift (bitcast "s64" z) 8))]]
+
+def (write `[[small ,z]])
+  (_init_from_cstr none (bless (write_signed z)))
+
+def (+ `[[small ,x]] `[[small ,y]])
+  let v = (bless (small_plus x y))
+  if v `[[small ,v]] (+ (promote `[[small ,x]]) (promote `[[small ,y]]))
+
+blessed (small_plus x y)
+{
+  vx = (to_s56 x)
+  vy = (to_s56 y)
+  if (fits_s56 (plus (s128_t (s64_t vx)) (s128_t (s64_t vy))))
+    return _false
+    return (s64lshift (s64plus vx vy) 8)
+}
+
+def (- `[[small ,x]] `[[small ,y]])
+  let v = (bless (small_minus x y))
+  if v `[[small ,v]] (- (promote `[[small ,x]]) (promote `[[small ,y]]))
+
+blessed (small_minus x y)
+{
+  vx = (to_s56 x)
+  vy = (to_s56 y)
+  if (fits_s56 (minus (s128_t (s64_t vx)) (s128_t (s64_t vy))))
+    return _false
+    return (s64lshift (s64minus vx vy) 8)
+}
+
+def (* `[[small ,x]] `[[small ,y]])
+  let v = (bless (small_times x y))
+  if v `[[small ,v]] (* (promote `[[small ,x]]) (promote `[[small ,y]]))
+
+blessed (small_times x y)
+{
+  vx = (to_s56 x)
+  vy = (to_s56 y)
+  if (fits_s56 (times (s128_t (s64_t vx)) (s128_t (s64_t vy))))
+    return _false
+    return (s64lshift (s64times vx vy) 8)
+}
+
+def (/ `[[small ,x]] `[[small ,y]])
+  let v = (bless (small_div x y))
+  if v `[[small ,v]] (/ (promote `[[small ,x]]) (promote `[[small ,y]]))
+
+blessed (small_div x y)
+{
+  vx = (to_s56 x)
+  vy = (to_s56 y)
+  if (fits_s56 (div (s128_t (s64_t vx)) (s128_t (s64_t vy))))
+    return _false
+    return (s64lshift (s64div vx vy) 8)
+}
+
+def (^ `[[small ,x]] `[[small ,y]])
+  let v = (bless (small_pow x y))
+  if v `[[small ,v]] (^ (promote `[[small ,x]]) `[[small ,y]])
+
+blessed (small_pow_rec r0 b e)
+{
+  !r1 = r0
+      
+  ;; If exponent is odd, multiply result by base
+  if (u64bit_and e 1)
+  {
+    ;; fits_s56 returns true if the value implies an overflow (is OUTSIDE range)
+    if (fits_s56 (times (s128_t r0) (s128_t b))) return _false { }
+    !r1 = (s64_t (times (s128_t r0) (s128_t b)))   
+  }
+  { }
+  
+  ;; Optimization: if e is 1, we are done
+  if (eq e 1) return (s64lshift r1 8) { }
+  
+  ;; Square the base for the next iteration
+  if (fits_s56 (times (s128_t b) (s128_t b))) return _false { }
+
+  ;; Loop
+  return (small_pow_rec r1 (s64_t (times (s128_t b) (s128_t b))) (rshift e 1))
+}
+
+blessed (small_pow x y)
+{
+  ;; Negative exponents return _false to promote to bignums/rationals..?
+  if (lt (to_s56 y) 0) return _false { }
+  
+  ;; x^0 = 1 (shifted 8 bits)
+  if (eq (to_s56 y) 0) return (s64lshift 1 8)
+  
+  ;; 0^y = 0 (where y > 0)
+  if (eq (to_s56 x) 0) return 0
+  
+  return (small_pow_rec 1 (to_s56 x) (to_s56 y))
+}
+
+
+def (= `[[small ,x]] `[[small ,y]]) (bless (equal x y)) 
+
+
+
+
+
+
+
+;; Big-int mpz_t wrapper
+
+;; add C defs for GMP alloc routines
+bless
+("
+void* gmp_allocate_function(size_t alloc_size)
+{
+  return GC_MALLOC_ATOMIC(alloc_size);
+}
+
+void* gmp_reallocate_function(void* ptr, size_t old_size, size_t new_size)
+{
+  return GC_REALLOC(ptr, new_size);
+}
+
+void gmp_deallocate_function(void* ptr, size_t size)
+{
+  GC_FREE(ptr);
+}
+")
+
+;; then place an init call in the entry_point codeblock:
+let _ = bless (seq_2 0 ("mp_set_memory_functions(&gmp_allocate_function, 
+  			                         &gmp_reallocate_function, 
+			                         &gmp_deallocate_function);"))
+
+
+def `[big ,x] + `[big ,y] `[big ,(bless (mpz_plus x y))] 
+def `[big ,x] - `[big ,y] `[big ,(bless (mpz_minus x y))]
+def `[big ,x] / `[big ,y] `[big ,(bless (mpz_div x y))]
+def `[big ,x] * `[big ,y] `[big ,(bless (mpz_times x y))]
+def `[big ,x] % `[big ,y] `[big ,(bless (mpz_modulo x y))]
+
+def `[big ,x] = `[big ,y] (bless (mpz_equal x y))
+def `[big ,x] < `[big ,y] (bless (mpz_lt x y))
+
+def `[big ,base] ^ `[[small ,exp]] `[big ,(bless (mpz_pow base exp))]
+
+def (write `[big ,x]) (_init_from_cstr none (bless (mpz_to_cstr x)))
+
+def (_init_from_int_cstr _ s) `[big ,(bless (cstr_to_mpz s))]
+
+
+blessed (cstr_to_mpz s)
+{
+  !x = (alloc_gc 2)
+
+  err = (call_3 mpz_init_set_str (mpz_ref x) (cstr_t s) 10)
+  if (neq err 0)
+     do (fatal "\"Invalid integer string for MPZ!\"")
+     { }
+
+  return x
+}
+
+blessed (s56_to_mpz n)
+{
+  !x = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref x))
+  do (call_2 mpz_set_si (mpz_ref x) (rshift (bitcast "s64" n) 8))
+  return x
+}
+
+blessed (mpz_to_s56 z)
+{
+  val = (call_1 mpz_get_si (mpz_ref z))
+  return (s64lshift (s64_t val) 8)
+}
+
+blessed (mpz_plus x y)
+{
+  !res = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref res))
+  do (call_3 mpz_add
+	     (deref (mpz_t res))
+	     (mpz_ref x) (mpz_ref y))
+  return res
+}
+
+blessed (mpz_sub_si z n)
+{
+  !res = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref res))
+  if (s64lte n 0)
+     do (call_3 mpz_add_ui (mpz_ref res) (mpz_ref z) (s64minus 0 n))
+     do (call_3 mpz_sub_ui (mpz_ref res) (mpz_ref z) (s64_t n))
+  return res
+}
+
+blessed (mpz_times x y)
+{
+  !res = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref res))
+  do (call_3 mpz_mul
+	     (deref (mpz_t res))
+	     (mpz_ref x) (mpz_ref y))
+  return res
+}
+
+blessed (mpz_minus x y)
+{
+  !res = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref res))
+  do (call_3 mpz_sub (deref (mpz_t res)) (mpz_ref x) (mpz_ref y))
+  return res
+}
+
+blessed (mpz_div x y)
+{
+  !res = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref res))
+  do (call_3 mpz_tdiv_q (deref (mpz_t res)) (mpz_ref x) (mpz_ref y))
+  return res
+}
+
+blessed (mpz_modulo x y)
+{
+  !res = (alloc_gc 2)
+  do (call_1 mpz_init (mpz_ref res))
+  do (call_3 mpz_tdiv_r (deref (mpz_t res)) (mpz_ref x) (mpz_ref y))
+  return res
+}
+
+blessed (mpz_lt x y)
+{
+  c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
+  if (lt (s64_t c) 0) return _true return _false
+}
+
+blessed (mpz_pow base exp)
+{
+  !res = (alloc_gc 2)
+  exp_u64 = (u64_t (to_s56 exp))
+  do (call_1 mpz_init (mpz_ref res))
+  do (call_3 mpz_pow_ui (deref (mpz_t res)) (mpz_ref base) (s64_t exp_u64))
+  return res
+}
+
+blessed (mpz_equal x y)
+{
+  c = (call_2 mpz_cmp (mpz_ref x) (mpz_ref y))
+  if (eq c 0) return _true return _false
+}
+
+
+blessed (mpz_to_cstr x)
+{
+  blen = (call_2 mpz_sizeinbase (mpz_ref x) 10)
+  !s = (alloc_bytes blen)
+  do (call_3 mpz_get_str (cstr_t s) 10 (mpz_ref x))
+  return s
+}
+
+
+
+;; Mixed operations and automatic promotion
+
+
+def (promote `[[small ,z]]) `[big ,(bless (s56_to_mpz z))]
+def (demote `[big ,z]) `[[small ,(bless (mpz_to_s56 z))]]
+
+def `[[small ,x]] + `[big ,y]  (promote `[[small ,x]]) + `[big ,y]
+def `[big ,x] + `[[small ,y]]  `[big ,x] + (promote `[[small ,y]])
+
+def `[[small ,x]] * `[big ,y]  (promote `[[small ,x]]) * `[big ,y]
+def `[big ,x] * `[[small ,y]]  `[big ,x] * (promote `[[small ,y]])
+
+def `[[small ,x]] - `[big ,y]  (promote `[[small ,x]]) - `[big ,y]
+def `[big ,x] - `[[small ,y]]  `[big ,x] - (promote `[[small ,y]])
+
+def `[[small ,x]] / `[big ,y]  (promote `[[small ,x]]) / `[big ,y]
+def `[big ,x] / `[[small ,y]]  `[big ,x] / (promote `[[small ,y]])
+
+def `[[small ,x]] < `[big ,y]  (promote `[[small ,x]]) < `[big ,y]
+def `[big ,x] < `[[small ,y]]  `[big ,x] < (promote `[[small ,y]])
+
+def `[[small ,x]] = `[big ,y]  `[[small ,x]] = (demote `[big ,y])
+def `[big ,x] = `[[small ,y]]  (demote `[big ,x]) = `[[small ,y]]
+
+
+
+
+;; k-ary operations
+
+
+
+
+
+
+
+
+

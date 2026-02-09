@@ -1,0 +1,119 @@
+
+
+
+
+include "clang.ti"
+include "stack.ti"
+
+
+include "str.ti"
+include "int.ti"
+include "seq.ti"
+include "slice.ti"
+include "bool.ti"
+
+
+include "main.ti"
+
+
+
+
+
+
+let none = `[none]
+
+
+def _ = _ false
+
+
+;; Boxing and tagging subword values
+
+blessed (box_subword value tag)
+  (u64bit_or (u64lshift value 8)
+	     (bit_or (plus 6 (u64rshift tag 5))
+		     (lshift (u64bit_and 31 tag) 3)))
+
+blessed (unbox_subword x) (u64rshift x 8)
+
+blessed (get_subword_tag x)
+  (plus (rshift (u64bit_and 255 x) 3)
+	(times 32 (minus (u64bit_and 7 x) 6)))
+
+
+
+
+
+;; Object head-word and slices
+
+blessed (obj_head_word len vtbl)
+  (bit_or (bit_or (u64lshift len 48) 255)
+  	  (lshift (bottom32 vtbl) 8))
+
+blessed (lookup_object_tag x) 
+  (u64bit_or (bottom32 (u64rshift (deref (manys_t (top61 x))) 8))
+	     (top32 (blessed_t _main)))
+
+blessed (get_object_tag x) 
+  (cond (eq 1 (u64bit_and x 7))
+	(lookup_object_tag x)
+	(u64minus 0 1))
+
+blessed (get_object_slice x)
+  ;; obj is tagged 001, slices 010
+  (cond (bit_or (eq 0 (deref (plus 1 (anys_t (top61 x)))))
+		(eq 255 (u64bit_and 255
+				    (deref (plus 1 (anys_t (top61 x)))))))
+	_empty
+	(u64plus 2 (plus 1 (anys_t (top61 x)))))
+
+
+
+
+
+
+;; Vtable lookup and dispatch
+
+blessed (vtable_lookup arg0 pos)
+{
+  tag = (u64bit_and 7 arg0)
+
+  if (eq tag 0) ;; function pointers do not have a vtable?
+    return (blessed_t fail_locally)
+  if (eq tag 1) ;; Normal heap-obj vtable lookup
+    return (indexat (_t "blessed_t*" (lookup_object_tag arg0)) pos)
+  if (eq tag 2) ;; Slice vtable lookup
+    return (indexat _u__slice_vtable pos)
+    
+  if (eq tag 6) ;; Subword vtable lookup
+    return (indexat (indexat subword_tables (get_subword_tag arg0)) pos)
+  if (eq tag 7)
+    return (indexat (indexat subword_tables (get_subword_tag arg0)) pos)
+  
+  { 
+   do (fatal "\"Unknown tag in vtable_lookup\"")
+   return 0
+  }
+}
+
+
+blessed (fail_dispatch)
+{
+  do (fatal "\"Dispatch Failed.\"")
+  return 0
+}
+
+
+blessed (fail_locally fallback a0 a1 a2 a3 a4 a5 a6)
+{
+  fun = (deref (anys_t fallback))
+  fb1 = (plus (manys_t fallback) 1)
+  return (fun fb1 a0 a1 a2 a3 a4 a5 a6)
+}
+
+
+
+
+
+
+
+

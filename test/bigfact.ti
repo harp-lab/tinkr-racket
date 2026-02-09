@@ -1,0 +1,27 @@
+
+bless ("#include <gmp.h>")
+bless ("#include <iostream>")
+
+blessed (fact z)
+{
+  if (u64_t (call_2 mpz_cmp_si (mpz_ref z) 0)) ;; z > 0
+  {
+    z1 = (mpz_sub_si z 1)
+    sub = (fact z1)
+    return (mpz_times sub z)
+  } 
+  return (s64_to_mpz 1)
+}
+
+
+blessed (entry_point)
+{
+  fifty = (s64_to_mpz 50)
+  z = (fact fifty)
+  do (mpz_print z)
+  return 0
+}
+
+
+
+

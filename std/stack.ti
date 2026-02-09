@@ -1,0 +1,16 @@
+
+
+
+
+blessed (stack_push x)
+  (seq_2 (assign (deref (manys_t stack_fr)) (many_t x))
+	 (assign stack_fr (many_t (plus (manys_t stack_fr) 1))))
+
+
+blessed (stack_pop)
+  (seq_2 (freeze (deref (minus (manys_t stack_fr) 1)))
+	 (assign stack_fr (many_t (minus (manys_t stack_fr) 1))))
+
+
+
+

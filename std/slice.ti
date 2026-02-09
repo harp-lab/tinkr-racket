@@ -1,0 +1,84 @@
+
+
+;; Printing
+
+
+def (write x=`[_slice ,_])  { "[" + (write_slice x) } + "]"
+def (write_slice x)
+  let rst = (rest x)
+    if rst = empty
+      (write (first x))
+      { (write (first x)) + " " } + (write_slice rst) 
+
+
+;; Equality
+
+def `[_slice ,s0] = `[_slice ,s1]
+  let a = (bless (deref (anys_t s0)))
+  let b = (bless (deref (anys_t s1)))
+  if a = b
+    (bless (slice_rest s0)) = (bless (slice_rest s1))
+    false
+
+
+;; Iteration
+
+def (first `[_slice ,ptr]) (bless (deref (anys_t ptr)))
+
+def (rest `[_slice ,ptr]) (bless (slice_rest ptr))
+
+
+blessed (slice_rest ptr)
+{
+  ptr1 = (plus 1 (anys_t ptr))
+  x = (deref (anys_t ptr1)) 
+  ;; Terminate on 0 (next chunk header) or 255 (next object header)
+  if (u64bit_or (eq 0 x) (eq 255 (u64bit_and 255 x)))
+      return _empty
+      return (u64plus 2 ptr1)
+}
+
+
+;; Concatenation
+
+def (+ `[_slice ,s1] `[_slice ,s2])
+  let n1 = (bless (slice_len s1))
+  let n2 = (bless (slice_len s2))
+    (bless (slice_concat s1 n1 s2 n2))
+
+def (+ ,empty x) x
+def (+ x=`[_slice ,_] ,empty) x
+
+
+blessed (slice_len ptr)
+{
+  val = (deref (anys_t ptr))
+  ;; Terminate on 0 (uninitialized) or 255 (next object header)
+  if (u64bit_or (eq 0 val) (eq 255 (u64bit_and 255 val)))
+    return 0
+    {
+      a = (slice_len (plus 1 (anys_t ptr)))
+      return (s64plus 1 a)
+    }
+}
+
+
+blessed (slice_concat p1 n1 p2 n2)
+{
+  total = (u64plus n1 n2)
+  !mem = (alloc (u64plus 1 total))
+  
+  ;; Write header 0 at index 0
+  do (assign (deref (manys_t mem)) 0)
+
+  ;; Copy p1 to mem[1] (memcpy takes bytes: n * 8)
+  do (memcpy (plus 1 (manys_t mem)) p1 (u64lshift n1 3))
+
+  ;; Copy p2 to mem[1 + n1]
+  do (memcpy (plus (u64plus 1 n1) (manys_t mem)) p2 (u64lshift n2 3))
+
+  ;; Return tagged pointer: (mem + 1) | 2
+  return (u64bit_or (plus 1 (manys_t mem)) 2)
+}
+
+

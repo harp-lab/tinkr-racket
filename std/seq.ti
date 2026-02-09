@@ -1,0 +1,16 @@
+
+
+
+
+let empty = `[empty]
+
+def (write `[empty]) "[]"
+
+def (first `[empty]) none
+
+def (rest `[empty]) none
+
+;;def (+ `[empty] x) x
+
+
+

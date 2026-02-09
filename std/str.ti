@@ -1,0 +1,170 @@
+
+
+
+include "clang.ti"
+
+bless ("#include <iostream>")
+
+
+
+
+
+
+def (_init_from_cstr _ cstr)
+  `[str ,(bless (str_len_hash cstr 0 0))
+	,cstr]
+
+
+def (size `[str ,len_hash ,cstr])
+  (_init_from_s64 none (bless (car_u32 len_hash)))
+
+
+def `[str ,len_hash0 ,cstr0] + `[str ,len_hash1 ,cstr1]
+  let len0 = (bless (car_u32 len_hash0))
+  let len1 = (bless (car_u32 len_hash1))
+  let s = (bless (cstr_concat2 cstr0 len0 cstr1 len1))
+    (_init_from_cstr none s)
+
+
+def (debug_print `[str ,len_hash ,cstr])
+  let _ = (bless (cstr_println cstr))
+    none
+
+
+
+
+
+
+blessed (cstr_println s)
+{
+  do ("std::cout << $0 << std::endl" (cstr_t s))
+  return 0
+}
+
+blessed (cstr_print s)
+{
+  do ("std::cout << $0" (cstr_t s))
+  return 0
+}
+
+
+blessed (str_inner_step cp byte type state)
+  (cond (neq state 0)
+	(bit_or (bit_and byte "0x3f") (lshift cp 6))
+	(bit_and (rshift "0xff" type) byte))
+
+blessed (str_step_one s)
+{
+  byte0 = (u64_t (u8_t (deref (cstr_t s))))
+  type0 = (u64_t (indexat utf8dfa (u32_t byte0)))
+  cp0 = (str_inner_step 0 byte0 type0 0)
+  state0 = (u64_t (indexat utf8dfa (u64plus 256 (u64plus type0 (u64times 0 16)))))
+
+  if (eq state0 0) return (cons_u32 cp0 1)
+  { }
+
+  byte1 = (u64_t (u8_t (deref (cstr_t (u64plus s 1)))))
+  type1 = (u64_t (indexat utf8dfa (u32_t byte1)))
+  cp1 = (str_inner_step cp0 byte1 type1 state0)
+  state1 = (u64_t (indexat utf8dfa (u64plus 256 (u64plus type1 (u64times state0 16)))))
+
+  if (eq state1 0) return (cons_u32 cp1 2)
+  { }
+  
+  byte2 = (u64_t (u8_t (deref (cstr_t (u64plus s 2)))))
+  type2 = (u64_t (indexat utf8dfa (u32_t byte2)))
+  cp2 = (str_inner_step cp1 byte2 type2 state1)
+  state2 = (u64_t (indexat utf8dfa (u64plus 256 (u64plus type2 (u64times state1 16)))))
+
+  if (eq state2 0) return (cons_u32 cp2 3)
+  { }
+
+  byte3 = (u64_t (u8_t (deref (cstr_t (u64plus s 3)))))
+  type3 = (u64_t (indexat utf8dfa (u32_t byte3)))
+  cp3 = (str_inner_step cp2 byte3 type3 state2)
+  state3 = (u64_t (indexat utf8dfa (u64plus 256 (u64plus type3 (u64times state2 16)))))
+
+  if (eq state3 0) return (cons_u32 cp3 4)
+  { }
+
+  do (fatal "\"Bad UTF-8 encoded string.\"")
+  return 0
+}
+
+blessed (str_len_hash s len h)
+{
+  if (eq (deref (cstr_t s)) 0) return 0 { }
+  
+  p0 = (str_step_one s)
+  s0 = (u64plus (cdr_u32 p0) s)
+  cp = (car_u32 p0)
+  h0 = (bit_xor (rotl (u32_t h) 3) (u32_t cp))
+  len0 = (u64plus len 1)
+  
+  if (eq (deref (cstr_t s0)) 0)
+    return (cons_u32 len0 h0)
+    return (str_len_hash s0 len0 h0)
+}
+
+blessed (cstr_concat2 a an b bn)
+{
+   anbn = (u64plus an bn)
+   !s = (alloc_bytes (u64plus anbn 1))
+   do (assign (indexat (cstr_t s) anbn) 0)
+   do (memcpy s a an)
+   do (memcpy (u64plus s an) b bn)
+   return s
+}
+
+blessed (cstr_concat3 a an b bn c cn)
+{
+   anbn = (u64plus an bn)
+   anbncn = (u64plus anbn cn)
+   !s = (alloc_bytes (u64plus anbncn 1))
+   do (assign (indexat (cstr_t s) anbncn) 0)
+   do (memcpy s a an)
+   do (memcpy (u64plus s an) b bn)
+   do (memcpy (u64plus s anbn) c cn)
+   return s
+}
+
+
+
+
+
+
+
+
+bless
+("
+
+
+#include <iostream>
+#include <cstring>
+
+static const uint8_t utf8dfa[] = {
+  // Copyright (c) 2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+  // See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 00..1f
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 20..3f
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 40..5f
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 60..7f
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9, // 80..9f
+  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7, // a0..bf
+  8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, // c0..df
+  0xa,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x4,0x3,0x3, // e0..ef
+  0xb,0x6,0x6,0x6,0x5,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8, // f0..ff
+  0x0,0x1,0x2,0x3,0x5,0x8,0x7,0x1,0x1,0x1,0x4,0x6,0x1,0x1,0x1,0x1, // s0..s0
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,0,1,0,1,1,1,1,1,1, // s1..s2
+  1,2,1,1,1,1,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1, // s3..s4
+  1,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,3,1,3,1,1,1,1,1,1, // s5..s6
+  1,3,1,1,1,1,1,3,1,3,1,1,1,1,1,1,1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // s7..s8
+};
+
+")
+
+
+
+
+
+

@@ -1,0 +1,176 @@
+
+
+include "memory.cpp"
+
+
+;; Inline expressions / macros for generating clang output 
+
+
+;; Type casts
+blessed (_t t x) ("(($0)$1)" t x)
+blessed (cstr_t x) (_t "char*" x)
+blessed (u8_t x) (_t "uint8_t" x)
+blessed (s8_t x) (_t "char" x)
+blessed (u128_t x) (_t "__uint128_t" x)
+blessed (s128_t x) (_t "__int128_t" x)
+blessed (u64_t x) (_t "u64" x)
+blessed (s64_t x) (_t "s64" x)
+blessed (u32_t x) (_t "u32" (u64_t x))
+blessed (s32_t x) (_t "s32" (s64_t x))
+blessed (any_t x) (_t "any" x)
+blessed (anys_t x) (_t "any*" x)
+blessed (many_t x) (_t "many" x)
+blessed (manys_t x) (_t "many*" x)
+blessed (uintptr_t x) (_t "uintptr_t" x)
+blessed (blessed_t x) (_t "blessed_t" x)
+
+blessed (bitcast t x) (call_1 ("std::bit_cast<$0>" t) x)
+
+
+;; Assignment
+blessed (assign lhs rhs) ("($0 = $1)" lhs rhs)
+blessed (seq_2 e0 e1) ("$0 ; $1" e0 e1)
+blessed (seq_3 e0 e1 e2) ("$0 ; $1 ; $2" e0 e1 e2)
+blessed (freeze e0) (call_1 freeze e0)
+blessed (init_obj x i v) (assign (indexat (manys_t x) i) (many_t v))
+
+
+;; Cond expressions
+blessed (cond ge te fe)
+  ("($0 ? $1 : $2)" (u64_t ge) (any_t te) (any_t fe))
+
+;; Pointer Dereference
+blessed (deref x) ("(*$0)" x)
+blessed (ptrto x) ("(&$0)" x)
+blessed (indexat x i) ("$0[$1]" x (u32_t i))
+
+
+;; Basic Operations (Generic)
+blessed (postplus x) ("($0++)" x)
+blessed (postminus x) ("($0--)" x)
+blessed (plus x y) ("($0 + $1)" x y)
+blessed (minus x y) ("($0 - $1)" x y)
+blessed (times x y) ("($0 * $1)" x y)
+blessed (div x y) ("($0 / $1)" x y)
+blessed (lte x y) ("($0 <= $1)" x y)
+blessed (lt x y) ("($0 < $1)" x y)
+
+blessed (rshift x n) ("($0 >> $1)" (u64_t x) (u32_t n))
+blessed (lshift x n) ("($0 << $1)" (u64_t x) (u32_t n))
+
+blessed (align_up x m)
+  (call_2 "alignup" (uintptr_t x) (u32_t m))
+
+blessed (bit_and x y) ("($0 & $1)" (u64_t x) (u64_t y))
+blessed (bit_or x y) ("($0 | $1)" (u64_t x) (u64_t y))
+blessed (bit_xor x y) ("($0 ^ $1)" (u64_t x) (u64_t y))
+blessed (eq x y) ("($0 == $1)" (u64_t x) (u64_t y))
+blessed (equal x y) (cond (eq x y) _true _false)
+blessed (neq x y) ("($0 != $1)" (u64_t x) (u64_t y))
+
+
+;; Basic Operations (u64)
+blessed (u64rshift x n) (rshift x n)
+blessed (u64lshift x n) (lshift x n)
+blessed (u64bit_and x y) (bit_and (u64_t x) (u64_t y))
+blessed (u64bit_or x y) (bit_or (u64_t x) (u64_t y))
+blessed (u64bit_xor x y) (bit_xor (u64_t x) (u64_t y))
+blessed (u64postplus x) (postplus (u64_t x))
+blessed (u64postminus x) (postminus (u64_t x))
+blessed (u64plus x y) (plus (u64_t x) (u64_t y))
+blessed (u64minus x y) (minus (u64_t x) (u64_t y))
+blessed (u64times x y) (times (u64_t x) (u64_t y))
+blessed (u64div x y) (div (u64_t x) (u64_t y))
+blessed (u64lte x y) (lte (u64_t x) (u64_t y))
+blessed (u64lt x y) (lt (u64_t x) (u64_t y))
+
+
+blessed (top61 x)    (u64bit_and x "0xfffffffffffffff8")
+blessed (top32 x)    (u64bit_and x "0xffffffff00000000")
+blessed (bottom32 x) (u64bit_and x "0x00000000ffffffff")
+
+
+;; Basic Operations (s64)
+blessed (s64rshift x n) ("($0 >> $1)" (s64_t x) (u32_t n))
+blessed (s64lshift x n) ("($0 << $1)" (s64_t x) (u32_t n))
+blessed (s64plus x y) (plus (s64_t x) (s64_t y))
+blessed (s64minus x y) (minus (s64_t x) (s64_t y))
+blessed (s64times x y) (times (s64_t x) (s64_t y))
+blessed (s64div x y) (div (s64_t x) (s64_t y))
+blessed (s64lte x y) (lte (s64_t x) (s64_t y))
+blessed (s64lt x y) (lt (s64_t x) (s64_t y))
+
+
+;; Some Utilities
+blessed (cons_u32 x y) (bit_or (lshift (u64_t x) 32) (u64_t (u32_t y)))
+blessed (car_u32 x) (rshift x 32)
+blessed (cdr_u32 x) (rshift (lshift x 32) 32)
+
+blessed (rotl x n) (call_2 "std::rotl" x n)
+blessed (rotr x n) (call_2 "std::rotr" x n)
+
+blessed (fatal s)
+{
+  do (cstr_println s)
+  do (call_0 "std::abort")
+  return 0
+}
+
+blessed (memcpy s a n)
+  (call_3 "memcpy" (_t "void*" s) (_t "void*" a) (u64_t n))
+
+
+
+;; Allocation prims
+blessed (alloc_refresh) 
+  (seq_3 (assign (deref (manys_t alloc_fr)) (many_t "0xff"))
+         (assign alloc_fr (alloc_gc 140))
+	 (assign alloc_bk (many_t (plus (manys_t alloc_fr) 139))))
+blessed (alloc_bytes n) ("(many)GC_MALLOC_ATOMIC($0)" (u32_t n))
+blessed (alloc_gc n) ("(many)GC_MALLOC($0*sizeof(many))" (u32_t n))
+blessed (alloc_is_valid) (u64lt alloc_fr alloc_bk)
+blessed (alloc_rollback n)
+  (assign alloc_fr (many_t (minus (manys_t alloc_fr) n)))
+blessed (alloc_attempt x n)
+  (seq_2 (assign x alloc_fr) 
+         (assign alloc_fr (many_t (plus (manys_t alloc_fr) n))))
+
+
+;; C calls of length 0 - 13
+blessed (call_0 cname) ("$0()" cname)
+blessed (call_1 cname x0) ("$0($1)" cname x0)
+blessed (call_2 cname x0 x1) ("$0($1,$2)" cname x0 x1)
+blessed (call_3 cname x0 x1 x2) ("$0($1,$2,$3)" cname x0 x1 x2)
+blessed (call_4 cname x0 x1 x2 x3)
+  ("$0($1,$2,$3,$4)" cname x0 x1 x2 x3)
+blessed (call_5 cname x0 x1 x2 x3 x4)
+  ("$0($1,$2,$3,$4,$5)" cname x0 x1 x2 x3 x4)
+blessed (call_6 cname x0 x1 x2 x3 x4 x5)
+  ("$0($1,$2,$3,$4,$5,$6)" cname x0 x1 x2 x3 x4 x5)
+blessed (call_7 cname x0 x1 x2 x3 x4 x5 x6)
+  ("$0($1,$2,$3,$4,$5,$6,$7)" cname x0 x1 x2 x3 x4 x5 x6)
+blessed (call_8 cname x0 x1 x2 x3 x4 x5 x6 x7)
+  ("$0($1,$2,$3,$4,$5,$6,$7,$8)" cname x0 x1 x2 x3 x4 x5 x6 x7)
+blessed (call_9 cname x0 x1 x2 x3 x4 x5 x6 x7 x8)
+  ("$0($1,$2,$3,$4,$5,$6,$7,$8,$9)" cname x0 x1 x2 x3 x4 x5 x6 x7 x8)
+blessed (call_10 cname x0 x1 x2 x3 x4 x5 x6 x7 x8 x9)
+  ("$0($1,$2,$3,$4,$5,$6,$7,$8,$9)" cname x0 x1 x2 x3 x4 x5 x6 x7
+   ("$0,$1" x8 x9))
+blessed (call_11 cname x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10)
+  ("$0($1,$2,$3,$4,$5,$6,$7,$8,$9)" cname x0 x1 x2 x3 x4 x5 x6 x7
+   ("$0,$1,$2" x8 x9 x10))
+blessed (call_12 cname x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+  ("$0($1,$2,$3,$4,$5,$6,$7,$8,$9)" cname x0 x1 x2 x3 x4 x5 x6 x7
+   ("$0,$1,$2,$3" x8 x9 x10 x11))
+blessed (call_13 cname x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+  ("$0($1,$2,$3,$4,$5,$6,$7,$8,$9)" cname x0 x1 x2 x3 x4 x5 x6 x7
+   ("$0,$1,$2,$3,$4" x8 x9 x10 x11 x12))
+
+
+
+
+
+
+
+
+

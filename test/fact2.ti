@@ -1,0 +1,10 @@
+
+
+def (fact 0) 1
+def (fact 1) 1
+def (fact n) n * (fact n-1)
+
+
+def (main) (debug_print (write (fact 100)))
+
+
