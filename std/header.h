@@ -21,9 +21,8 @@
 #define ATOMIC_PRINT(content) \
     do { \
         std::ostringstream ss_; \
-        ss_ << content; \
-        ss_ << std::endl; \
-        std::cout << ss_.str(); \
+        ss_ << content << '\n'; \
+        std::cout << ss_.str() << std::flush; \
     } while(0)
 
 #ifdef DEBUG 

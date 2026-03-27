@@ -48,6 +48,8 @@
       (match elst
         ['() `(if (bless ((ref equal) (ref empty) ,x))
                   ,body ,fail-e)]
+	[(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
+         (desugar-pat x pat fail-e body qd)]
         [(cons e0 es)
          (define gx0 (gensymb 'car))
          (define gx1 (gensymb 'cdr))
@@ -142,7 +144,7 @@
 		 ,fail-e))]
 
       ;; List patterns
-      [`((ref |[]|) ,es ...) #:when (= qd 0)
+      [`((ref |[]|) ,es ...)
        (slice-pat x es)]
 
       [`(,es ...) #:when (> qd 0)
@@ -152,35 +154,101 @@
 
   (define (desugar-one-def name failx ast)
     (match ast
-      [`(def ((ref ,_) ,params ...) ,maybe-when ... ,body)
-       (define oneslice
-	 (lambda ()
-	   (set! oneslice (lambda () #t))
-	   #f))
-       (define (pat->param pat)
-	 (match pat
-	   [`(ref ,x) `(ref ,(if (eq? x '_) (gensymb '_) x))]
-	   [`(const ,v) `(ref ,(gensymb 'const))]	       
-	   [`((ref ,ell) (ref ,x))
-	    #:when (equal? ell '|...|)
-	    (when (oneslice) (error 'ambiguous-slices))
-	    `((ref ,ell) (ref ,(if (eq? x '_) (gensymb '_) x)))]
-	   [_ `(ref ,(gensymb 'pat))]))
-       (define params-x (map pat->param params))
-       (when (and (oneslice)
-		  (list? (car (last params-x)))
-		  (eq? '|...| (second (car (last params-x)))))
-	 (error 'non-tail-slice))
-       (define fail-e `((ref ,failx) (ref ,fallback-x) ,@params-x))
+      [`(def ((ref ,fname) ,params ...) ,maybe-when ... ,body)
+       (define (process-params ps idx overflow-x)
+         (match ps
+           ['()
+            (cond
+              [(< idx 6)
+               (let ([pc (gensymb 'pad_check)])
+                 (values (list `(ref ,pc))
+                         (lambda (b fail-ast)
+                           `(if (bless ((ref equal) (ref _noarg) (ref ,pc))) ,b ,fail-ast))))]
+              [(= idx 6)
+               (let ([pc (gensymb 'pad_check)])
+                 (values (list `(ref ,pc))
+                         (lambda (b fail-ast)
+                           `(if (bless ((ref equal) (ref _noarg) (ref ,pc)))
+                                ,b
+                                (if (bless ((ref equal) (ref empty) (ref ,pc))) ,b ,fail-ast)))))]
+              [else
+               (values '()
+                       (lambda (b fail-ast)
+                         (if overflow-x
+                             `(if (bless ((ref equal) (ref empty) ,overflow-x)) ,b ,fail-ast)
+                             b)))])]
+           
+           [(cons `((ref ,ell) ,inner-pat) rest-ps) #:when (eq? ell '|...|)
+            (unless (null? rest-ps)
+              (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
+            (define rest-name (gensymb 'rest))
+            (if (< idx 6)
+                (let* ([remaining (- 6 idx)]
+                       [gather-vars (for/list ([i (in-range remaining)]) (gensymb 'gather))]
+                       [gather-refs (map (lambda (v) `(ref ,v)) gather-vars)]
+                       [slice-var (gensymb 'gather_slice)]
+                       [pad-noargs (for/list ([i (in-range (- 6 remaining))]) '(ref _noarg))])
+                  (values `(,@gather-refs (ref ,slice-var))
+                          (lambda (b fail-ast)
+                            `(let (ref ,rest-name) 
+                               ((ref _gather) (ref none) ,@gather-refs ,@pad-noargs (ref ,slice-var))
+                               ,(desugar-pat `(ref ,rest-name) inner-pat fail-ast b)))))
+                (values '()
+                        (lambda (b fail-ast)
+                          (desugar-pat overflow-x inner-pat fail-ast b))))]
+           
+           [(cons pat rest-ps)
+            (define px (match pat
+                         [`(ref ,x) `(ref ,(if (eq? x '_) (gensymb '_) x))]
+                         [`(const ,v) `(ref ,(gensymb 'const))]
+                         [_ `(ref ,(gensymb 'pat))]))
+            (if (or (< idx 6) (eq? fname '_gather))
+                (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
+                  (values (cons px rest-px)
+                          (lambda (b fail-ast)
+                            (define match-logic (desugar-pat px pat fail-ast (binder b fail-ast)))
+                            (if (eq? fname '_gather)
+                                match-logic
+                                `(if (bless ((ref equal) (ref _noarg) ,px)) ,fail-ast ,match-logic)))))
+                (if (= idx 6)
+                    (let* ([slice-x (gensymb 'overflow)]
+                           [slice-ref `(ref ,slice-x)]
+                           [next-slice-x (gensymb 'overflow_rest)])
+                      (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
+                        (values (cons slice-ref rest-px)
+                                (lambda (b fail-ast)
+                                  `(if (bless ((ref equal) (ref _noarg) ,slice-ref))
+                                       ,fail-ast
+                                       (if (bless ((ref equal) (ref empty) ,slice-ref))
+                                           ,fail-ast
+                                           (let ,px ((ref first) (ref none) ,slice-ref)
+                                             (let (ref ,next-slice-x) ((ref rest) (ref none) ,slice-ref)
+                                               ,(desugar-pat px pat fail-ast (binder b fail-ast))))))))))
+                    (let* ([next-slice-x (gensymb 'overflow_rest)])
+                      (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
+                        (values rest-px 
+                                (lambda (b fail-ast)
+                                  `(if (bless ((ref equal) (ref empty) ,overflow-x))
+                                       ,fail-ast
+                                       (let ,px ((ref first) (ref none) ,overflow-x)
+                                         (let (ref ,next-slice-x) ((ref rest) (ref none) ,overflow-x)
+                                           ,(desugar-pat px pat fail-ast (binder b fail-ast)))))))))))]))
        
-       `(def ((ref ,name) (ref ,fallback-x) ,@params-x)
-	     ,(foldr (lambda (x pat body)
-		       (desugar-pat x pat fail-e body))
-		     `(if ,(desugar-ast `((ref |&|) ,@maybe-when))
-			  ,(desugar-ast body)
-			  ,fail-e)
-		     params-x
-		     params))]))
+       (define-values (params-x body-binder) (process-params params 0 #f))
+       (define sig-params
+         (let loop ([pxs params-x] [sofar 1])
+           (if (>= sofar bless-arg-count)
+               '()
+               (if (null? pxs)
+                   (cons `(ref ,(gensymb '_)) (loop '() (add1 sofar)))
+                   (cons (car pxs) (loop (cdr pxs) (add1 sofar)))))))
+       (define fail-e `((ref ,failx) (ref ,fallback-x) ,@sig-params))
+       `(def ((ref ,name) (ref ,fallback-x) ,@sig-params)
+          ,(body-binder 
+            `(if ,(desugar-ast `((ref |&|) ,@maybe-when))
+                 ,(desugar-ast body)
+                 ,fail-e)
+            fail-e))]))
   
   (define (desugar-ast ast [qd 0])
     ;; Desugar expression ASTs 
@@ -264,16 +332,17 @@
       
       ;; Handle general let patterns with desugar-pat helper
       [`(let ,pat ,rhs ,body)
-       (define fail-e `((ref error0)))
+       (define fail-e
+         (desugar-ast `(bless ((ref fatal) (const "\"Let pattern failure.\"")))))
        (define rhsx (gensymb 'rhs))
        `(let (ref ,rhsx) ,(desugar-ast rhs)
-	     (desugar-pat `(ref ,rhsx) pat fail-e (desugar-ast body)))]
+	     ,(desugar-pat `(ref ,rhsx) pat fail-e (desugar-ast body)))]
       
       [`(if ,g ,t ,e)
        `(if ,(desugar-ast g) ,(desugar-ast t) ,(desugar-ast e))]
 
       [`((ref |[]|) ,es ...)
-       (desugar-ast `(|[]| ,@es))]
+       (desugar-ast `(|[]| ,@es) qd)]
       [`(|[]|) `(ref empty)]
       [`(|[]| ,es ...)
        (define chunks
@@ -306,8 +375,25 @@
 
       ;; Untagged application
       [`(,ef ,es ...)
-       `(,(desugar-ast ef) (ref none) ,@(map desugar-ast es))]
-
+       (define ef+ (desugar-ast ef qd))
+       (define es+ (map (lambda (e) (desugar-ast e qd)) es))
+       (define (is-splice? e)
+         (match e [`(|...| ,_) #t] [_ #f]))
+       (cond
+	[(equal? ef+ '(ref raw_apply))
+        `(,ef+ ,@es+)]
+        [(ormap is-splice? es+)
+         (define arg-list (desugar-ast `(|[]| ,@es) qd))
+         `((ref _apply) (ref none) ,ef+ ,arg-list)]
+        [(< (length es+) (- bless-arg-count 2))
+         ;; Fits perfectly in a0-a5: prepend the fallback
+         `(,ef+ (ref none) ,@es+)]
+	[else ;; Overflow: gather tail into a slice
+         (define head (take es+ (- bless-arg-count 2)))
+         (define raw-tail (drop es (- bless-arg-count 2)))
+         (define residual-slice (desugar-ast `(|[]| ,@raw-tail) qd))
+         `(,ef+ (ref none) ,@head ,residual-slice)])]
+      
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
   
@@ -393,10 +479,10 @@
 	      ,blessed ,lets ,defs)
 
      (define defs+
-       (foldl (lambda (name defs+) ;; 2. Add new/lifted defs
+       (foldl (lambda (name defs+) ;; 2. add new/lifted defs
 		(cons (cons name (hash-ref lifted-defs name))
 		      defs+))
-              (foldl (lambda (kv defs+) ;; 1. Desugar defs
+              (foldl (lambda (kv defs+) ;; 1. desugar defs
 		       (append (desugar-defs (cdr kv)) defs+))
 		     '()
 		     defs)

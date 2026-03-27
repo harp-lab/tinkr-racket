@@ -142,8 +142,13 @@
 
 
 (define (wait-on-all-threads lst)
-  (for ([t (in-list lst)])
-       (when (thread? t) (thread-wait t))))
+  (define threads (filter thread? lst))
+  (let loop ([running threads])
+    (unless (null? running)
+      (define result (sync (apply choice-evt build-error-chan running)))
+      (if (exn:fail? result)
+          (error 'build-failed "Worker thread crashed:\n~a" (exn-message result))
+          (loop (remove result running))))))
 
 
 (define (build-project path)
@@ -151,12 +156,8 @@
   (define project (setup-build-workspace path))
 
   ;; Cleanup stale parts of the build
-  (run-cmd (find-executable-path "rm") "-f"
-	   "/tmp/ti/build/*/*/*.cpp"
-	   "/tmp/ti/build/*/*/*.h"
-	   "/tmp/ti/build/*/*/*.core"
-	   "/tmp/ti/build/*/*/*.bl"
-	   "/tmp/ti/build/*/*/*.o")  
+  (run-cmd (find-executable-path "sh") "-c"
+       "rm -f /tmp/ti/build/*/*/*.cpp /tmp/ti/build/*/*/*.h /tmp/ti/build/*/*/*.core /tmp/ti/build/*/*/*.bl /tmp/ti/build/*/*/*.o")  
 
   ;; Launch ~7 independent racket processes
   ;; These tackle the initial per-module compilation

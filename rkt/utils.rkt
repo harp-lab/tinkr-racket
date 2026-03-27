@@ -18,6 +18,7 @@
 	 escape-id-for-C
 	 escape-atom-for-C
 	 bless-format
+	 bless-arg-count
 	 std-entry-path
 	 build-clang!
 	 build-cpp!
@@ -286,13 +287,13 @@
 
 
 (define bless-arg-count 8)
+
 (define (pad-args sofar)
   (if (>= sofar bless-arg-count)
       '()
-      (cons `(const 0) (pad-args (add1 sofar)))))
+      (cons `(ref _u__noarg) (pad-args (add1 sofar)))))
+
 (define (pad-params sofar)
   (if (>= sofar bless-arg-count)
       '()
       (cons `(ref ,(gensymb '_)) (pad-params (add1 sofar)))))
-
-

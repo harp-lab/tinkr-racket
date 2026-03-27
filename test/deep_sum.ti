@@ -1,0 +1,13 @@
+
+
+def (deep_sum 0) 0
+def (deep_sum n)
+  ;; The addition after the call forces 'n' to be captured 
+  ;; in a lifted CPS continuation and pushed to stack_fr.
+  let rest = (deep_sum n-1)
+  n + rest
+
+def (main)
+  ;; Kept small (10) to ensure the test completes instantly
+  (debug_print (write (deep_sum 10)))
+

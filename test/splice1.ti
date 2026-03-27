@@ -1,0 +1,14 @@
+
+
+;; Target function expecting exactly 5 arguments
+def (f a b c d e) 
+  a + b + c + d + e
+
+;; A function that returns a slice (requires a non-local jump)
+def (get_slice) 
+  [1 2 3 4 5]
+
+def (main)
+  ;; The ANF converter must extract (get_slice) before splicing it into f
+  (debug_print (write (f (get_slice) ...)))
+

@@ -6,6 +6,7 @@
 	 compile-headers
 	 compile-cpp-to-object
 	 link-and-build-bin
+	 build-error-chan
 	 run-cmd)
 
 (require "utils.rkt"
@@ -18,9 +19,19 @@
   (if (eq? (system-type) 'windows) "NUL" "/dev/null"))
 
 
+;; Channel to catch and bubble up thread crashes
+(define build-error-chan (make-channel))
+
+;; Spawns a thread that reports exceptions back to the main thread
+(define (spawn-safe thunk)
+  (thread
+   (lambda ()
+     (with-handlers ([exn:fail? (lambda (exn) (channel-put build-error-chan exn))])
+       (thunk)))))
+
 ;; Spins up a new process to handle a small set of files/X folders 
 (define (spawn-compile-one folder-names)
-  (thread
+  (spawn-safe
    (lambda ()
      (define rkt-path 
        (string-replace
@@ -112,7 +123,7 @@
 
 
 (define (compile-cpp-to-object cpp-path header-path obj-path)
-  (thread
+  (spawn-safe
    (lambda ()
      (define cxx-path (or (find-executable-path "clang++") 
 			  (find-executable-path "c++")))
@@ -126,12 +137,12 @@
               "-march=native"
               "-flto=thin" 
               "-ferror-limit=3")
-     ;; Copy the .o file into the build folder
+     ;; Copy the .o file into the build folder using the hashed dir name
      (copy-file obj-path
-		(match (explode-path obj-path)
-		  [`(,front ... ,_ ,file)
-		   (apply build-path `(,@front ,file))])
-		#t))))
+        (match (explode-path obj-path)
+          [`(,front ... ,dir ,file)
+           (apply build-path `(,@front ,(format "~a.o" (path->string dir))))])
+        #t))))
 
 
 (define (compile-objects-to-bin project-path

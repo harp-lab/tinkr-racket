@@ -215,18 +215,18 @@ let _ = bless (seq_2 0 ("mp_set_memory_functions(&gmp_allocate_function,
 			                         &gmp_deallocate_function);"))
 
 
-def `[big ,x] + `[big ,y] `[big ,(bless (mpz_plus x y))] 
-def `[big ,x] - `[big ,y] `[big ,(bless (mpz_minus x y))]
-def `[big ,x] / `[big ,y] `[big ,(bless (mpz_div x y))]
-def `[big ,x] * `[big ,y] `[big ,(bless (mpz_times x y))]
-def `[big ,x] % `[big ,y] `[big ,(bless (mpz_modulo x y))]
+def `[big ,x] + `[big ,y] `[big ,(bless (_mpz_plus x y))] 
+def `[big ,x] - `[big ,y] `[big ,(bless (_mpz_minus x y))]
+def `[big ,x] / `[big ,y] `[big ,(bless (_mpz_div x y))]
+def `[big ,x] * `[big ,y] `[big ,(bless (_mpz_times x y))]
+def `[big ,x] % `[big ,y] `[big ,(bless (_mpz_modulo x y))]
 
-def `[big ,x] = `[big ,y] (bless (mpz_equal x y))
-def `[big ,x] < `[big ,y] (bless (mpz_lt x y))
+def `[big ,x] = `[big ,y] (bless (_mpz_equal x y))
+def `[big ,x] < `[big ,y] (bless (_mpz_lt x y))
 
-def `[big ,base] ^ `[[small ,exp]] `[big ,(bless (mpz_pow base exp))]
+def `[big ,base] ^ `[[small ,exp]] `[big ,(bless (_mpz_pow base exp))]
 
-def (write `[big ,x]) (_init_from_cstr none (bless (mpz_to_cstr x)))
+def (write `[big ,x]) (_init_from_cstr none (bless (_mpz_to_cstr x)))
 
 def (_init_from_int_cstr _ s) `[big ,(bless (cstr_to_mpz s))]
 
@@ -235,7 +235,7 @@ blessed (cstr_to_mpz s)
 {
   !x = (alloc_gc 2)
 
-  err = (call_3 mpz_init_set_str (mpz_ref x) (cstr_t s) 10)
+  err = (s64_t (call_3 mpz_init_set_str (mpz_ref x) (cstr_t s) 10))
   if (neq err 0)
      do (fatal "\"Invalid integer string for MPZ!\"")
      { }
@@ -257,7 +257,7 @@ blessed (mpz_to_s56 z)
   return (s64lshift (s64_t val) 8)
 }
 
-blessed (mpz_plus x y)
+blessed (_mpz_plus x y)
 {
   !res = (alloc_gc 2)
   do (call_1 mpz_init (mpz_ref res))
@@ -267,7 +267,7 @@ blessed (mpz_plus x y)
   return res
 }
 
-blessed (mpz_sub_si z n)
+blessed (_mpz_sub_si z n)
 {
   !res = (alloc_gc 2)
   do (call_1 mpz_init (mpz_ref res))
@@ -277,7 +277,7 @@ blessed (mpz_sub_si z n)
   return res
 }
 
-blessed (mpz_times x y)
+blessed (_mpz_times x y)
 {
   !res = (alloc_gc 2)
   do (call_1 mpz_init (mpz_ref res))
@@ -287,7 +287,7 @@ blessed (mpz_times x y)
   return res
 }
 
-blessed (mpz_minus x y)
+blessed (_mpz_minus x y)
 {
   !res = (alloc_gc 2)
   do (call_1 mpz_init (mpz_ref res))
@@ -295,7 +295,7 @@ blessed (mpz_minus x y)
   return res
 }
 
-blessed (mpz_div x y)
+blessed (_mpz_div x y)
 {
   !res = (alloc_gc 2)
   do (call_1 mpz_init (mpz_ref res))
@@ -303,7 +303,7 @@ blessed (mpz_div x y)
   return res
 }
 
-blessed (mpz_modulo x y)
+blessed (_mpz_modulo x y)
 {
   !res = (alloc_gc 2)
   do (call_1 mpz_init (mpz_ref res))
@@ -311,13 +311,13 @@ blessed (mpz_modulo x y)
   return res
 }
 
-blessed (mpz_lt x y)
+blessed (_mpz_lt x y)
 {
   c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
   if (lt (s64_t c) 0) return _true return _false
 }
 
-blessed (mpz_pow base exp)
+blessed (_mpz_pow base exp)
 {
   !res = (alloc_gc 2)
   exp_u64 = (u64_t (to_s56 exp))
@@ -326,14 +326,14 @@ blessed (mpz_pow base exp)
   return res
 }
 
-blessed (mpz_equal x y)
+blessed (_mpz_equal x y)
 {
-  c = (call_2 mpz_cmp (mpz_ref x) (mpz_ref y))
+  c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
   if (eq c 0) return _true return _false
 }
 
 
-blessed (mpz_to_cstr x)
+blessed (_mpz_to_cstr x)
 {
   blen = (call_2 mpz_sizeinbase (mpz_ref x) 10)
   !s = (alloc_bytes blen)

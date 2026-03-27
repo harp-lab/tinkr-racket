@@ -267,6 +267,18 @@
                     ,w-eq-b ,rest-e)
                   start-tok)])))
 
+(define (parse-test is-toplevel qd)
+  (define start-tok (peek))
+  (advance) ;; Consume 'test'
+  (define e (parse qd)) ;; Automatically parses `a = b` into `((ref =) a b)`!
+  
+  (unless is-toplevel
+    (printf "Warning: Inner-scope tests are currently vestigial and ignored (~a:~a)\n"
+            (pos->file (token->pos start-tok)) 
+            (pos->startline (token->pos start-tok))))
+            
+  (emit-expr `(test ,e) start-tok))
+
 (define (parse-let is-toplevel qd)
   (define start-tok (peek))
   (advance)
@@ -291,6 +303,8 @@
          (define tag-str (parse-id-then-N parse 2 0))
          (define body (parse-top-level))
          (emit-expr `(,@tag-str ,body) start-tok)]
+
+	["test" (parse-test #t 0)]
 
 	["let" (parse-let #t 0)]
         [(or "use" "include" "bless")
@@ -326,14 +340,15 @@
 ;; Defines keyword parsers
 (define keywords
   (hash "def"    (lambda (qd) (lambda () (parse-def #f qd)))
-	"pure"    (lambda (qd) (lambda () (parse-def #f qd)))
+	"pure"   (lambda (qd) (lambda () (parse-def #f qd)))
         "let"    (lambda (qd) (lambda () (parse-let #f qd)))
+	"test"   (lambda (qd) (lambda () (parse-test #f qd)))
         "use"    (lambda (qd) (make-parse-id-then-N-emit parse 2 qd))
         "if"     (lambda (qd) (make-parse-id-then-N-emit parse 3 qd))
         "lambda" (lambda (qd) (make-parse-id-then-N-emit parse 2 qd))
 	"return" (lambda (qd) (make-parse-id-then-N-emit parse 1 qd))
-	"do" (lambda (qd) (make-parse-id-then-N-emit parse 1 qd))
-	"bless" (lambda (qd) (make-parse-id-then-N-emit parse 1 qd))
+	"do"     (lambda (qd) (make-parse-id-then-N-emit parse 1 qd))
+	"bless"  (lambda (qd) (make-parse-id-then-N-emit parse 1 qd))
         "#"      (lambda (qd) (make-parse-id-then-N-emit parse 2 qd))
         "new"    (lambda (qd) (make-parse-id-then-N-emit parse 3 qd))
         "renew"  (lambda (qd) (make-parse-id-then-N-emit parse 2 qd))))

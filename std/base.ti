@@ -21,9 +21,9 @@ include "main.ti"
 
 
 let none = `[none]
+let _noarg = `[_noarg]
 
-
-def _ = _ false
+def x = y false
 
 
 ;; Boxing and tagging subword values
@@ -67,17 +67,69 @@ blessed (get_object_slice x)
 	(u64plus 2 (plus 1 (anys_t (top61 x)))))
 
 
+;; Runtime trampoline for dynamically spliced function calls
+def (_apply f args)
+  if (= args empty) (f)
+  let a0 = (first args)
+  let r0 = (rest args)
+  if (= r0 empty) (f a0)
+  
+  let a1 = (first r0)
+  let r1 = (rest r0)
+  if (= r1 empty) (f a0 a1)
+  
+  let a2 = (first r1)
+  let r2 = (rest r1)
+  if (= r2 empty) (f a0 a1 a2)
+  
+  let a3 = (first r2)
+  let r3 = (rest r2)
+  if (= r3 empty) (f a0 a1 a2 a3)
+  
+  let a4 = (first r3)
+  let r4 = (rest r3)
+  if (= r4 empty) (f a0 a1 a2 a3 a4)
+  
+  let a5 = (first r4)
+  let r5 = (rest r4)
+  if (= r5 empty) (f a0 a1 a2 a3 a4 a5)
+  
+  (raw_apply f a0 a1 a2 a3 a4 a5 r5)
+
+;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
+blessed (_raw__apply f a0 a1 a2 a3 a4 a5 r5)
+{
+  ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
+  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f a0 a1 a2 a3 a4 a5 r5)
+  return 0
+}
 
 
-
+;; Runtime gatherer for dynamically building vararg slices from registers
+def (_gather a0 a1 a2 a3 a4 a5 a6)
+  let base_slice = 
+    if (bless (equal a3 _noarg))
+      ;; Length is between 0 and 3
+      if (bless (equal a0 _noarg)) empty
+      if (bless (equal a1 _noarg)) [a0]
+      if (bless (equal a2 _noarg)) [a0 a1]
+      [a0 a1 a2]
+    ;; Length is between 4 and 6
+    if (bless (equal a4 _noarg)) [a0 a1 a2 a3]
+    if (bless (equal a5 _noarg)) [a0 a1 a2 a3 a4]
+    [a0 a1 a2 a3 a4 a5]
+  
+  ;; Always treat a6 as variadic
+  if (bless (equal a6 _noarg))
+    base_slice
+    base_slice + a6
 
 ;; Vtable lookup and dispatch
-
 blessed (vtable_lookup arg0 pos)
 {
   tag = (u64bit_and 7 arg0)
 
-  if (eq tag 0) ;; function pointers do not have a vtable?
+  if (eq tag 0) ;; function pointers (no vtable)
     return (blessed_t fail_locally)
   if (eq tag 1) ;; Normal heap-obj vtable lookup
     return (indexat (_t "blessed_t*" (lookup_object_tag arg0)) pos)

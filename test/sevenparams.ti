@@ -1,0 +1,13 @@
+
+
+
+;; Exactly 7 parameters to force the use of a0-a5 plus the slice overflow
+def (f a b c d e g h) 
+  [h g e d c b a]
+
+def (main)
+  ;; Spread exactly 7 elements
+  let s = [1 2 3 4 5 6 7]
+  (debug_print (write (f s ...)))
+
+

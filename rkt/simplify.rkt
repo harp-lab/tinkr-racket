@@ -81,20 +81,22 @@
     [`(let ,lhs ,rhs)
      `(let ,(alphatize+ lhs) ,(alphatize+ rhs))]
 
-    ;; Alphatize defs (w/ empty env, only escapes for C)
+    ;; Alphatize defs (w/ param alpha-renaming)
     [`(def ((ref ,fx) ,args ...) ,body)
-     (define (escape-fml arg)
-       (match arg
-         [`(ref ,x) `(ref ,(escape-id-for-C x))]
-         [`(,ell (ref ,x)) `(,ell (ref ,(escape-id-for-C x)))]))
-     `(def ,(map escape-fml `((ref ,fx) ,@args))
-	   ,(alphatize+ body
-			(foldl (lambda (a h)
-				 (match a
-				   [`(ref ,x) (hash-set h x x)]
-				   [`(,ell (ref ,x)) #:when (eq? ell '|...|)
-				    (hash-set h x x)]))
-			       (hash) args)))]
+     (define env (hash))
+     (define args+
+       (for/list ([arg (in-list args)])
+         (match arg
+           [`(ref ,x)
+            (define x+ (gensymb x))
+            (set! env (hash-set env x x+))
+            `(ref ,(escape-id-for-C x+))]
+           [`(,ell (ref ,x)) #:when (eq? ell '|...|)
+            (define x+ (gensymb x))
+            (set! env (hash-set env x x+))
+            `(,ell (ref ,(escape-id-for-C x+)))])))
+     `(def ((ref ,(escape-id-for-C fx)) ,@args+)
+        ,(alphatize+ body env))]
 
     [_ (pretty-print ast)
        (error 'alphatize)]))
@@ -416,9 +418,7 @@
       
       ;; Emit a method call based on the _pos and _link variables
       [`((ref ,fx)) (error "Not yet supported: thunk call, no args")]
-      [`((ref ,fx) ,arg0 ,args ...) ;; global methods only so far
-       (when (not (set-member? global-names fx))
-	 (error (format "Not yet supported: call to local var ~a" fx)))
+      [`((ref ,fx) ,arg0 ,args ...)
        `((return ((ref ,fx) ,arg0 ,@args)))]
       
       [_ (pretty-print ast)

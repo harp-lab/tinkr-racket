@@ -1,0 +1,19 @@
+
+
+;; Base case: empty slice
+def (collapse []) 0
+
+;; Recursive case: destructure the head and the rest
+def (collapse [head tail ...])
+  ;; Forces 'head' onto the CPS stack
+  let sub_total = (collapse tail)
+  ;; Auto-promotion to GMP big int occurs here
+  head + sub_total
+
+def (main)
+  ;; 50^3 is large enough to force GMP promotion in most 56-bit tagging schemes
+  let s = [(^ 50 1) (^ 50 2) (^ 50 3)]
+  (debug_print (write (collapse s)))
+
+
+
