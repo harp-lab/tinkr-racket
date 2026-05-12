@@ -121,22 +121,32 @@
   (unless (zero? (subprocess-status sp))
     (error (format "Build command failed: ~a ~a" prog args))))
 
+;; Finds the path to a C++ compiler. Returns a tuple containing both the
+;; type of compiler (clang++ or c++) and path.
+(define (find-cxx-path)
+  (define clang-attempt (find-executable-path "clang++"))
+  (cond
+    [clang-attempt `(clang++ ,clang-attempt)]
+    [else
+      (define c++-attempt (find-executable-path "c++"))
+      (unless c++-attempt (error "Error: neither clang++ nor c++ not found in PATH."))
+      `(c++ ,c++-attempt)]))
 
 (define (compile-cpp-to-object cpp-path header-path obj-path)
   (spawn-safe
    (lambda ()
-     (define cxx-path (or (find-executable-path "clang++") 
-			  (find-executable-path "c++")))
-     (unless cxx-path (error "Error: clang++ not found in PATH."))
-     (run-cmd cxx-path
-              "-c" cpp-path
-              "-o" obj-path
-              "-include" header-path 
-              "-std=c++20"
-	      "-g"  "-DDEBUG"
-              "-march=native"
-              "-flto=thin" 
-              "-ferror-limit=3")
+     (match-define `(,cxx-type ,cxx-path) (find-cxx-path))
+     (apply run-cmd
+            (append
+              (list cxx-path
+                "-c" cpp-path
+                "-o" obj-path
+                "-include" header-path 
+                "-std=c++20"
+          "-g"  "-DDEBUG"
+                "-march=native"
+                (if (equal? cxx-type 'clang++) "-ferror-limit=3" "-fmax-errors=3"))
+              (if (equal? cxx-type 'clang++) (list "-flto=thin") '())))
      ;; Copy the .o file into the build folder using the hashed dir name
      (copy-file obj-path
         (match (explode-path obj-path)

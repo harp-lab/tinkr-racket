@@ -8,3 +8,14 @@ Only a few tests are currently working. Stay tuned.
 
 
 
+## Build Instructions
+
+This project requires a few dependencies which can be installed with:
+
+```
+sudo apt-get install libgc-dev
+sudp apt-get install libgmp-dev
+sudo apt-get install lld
+```
+
+Try running `racket temp.rkt`
