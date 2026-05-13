@@ -1,0 +1,6 @@
+
+def (main)
+  let val = false
+  if val
+     (debug_print (write [1]))
+     (debug_print (write [2]))

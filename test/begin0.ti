@@ -1,0 +1,8 @@
+def (main)
+    let a
+        (debug_print (write 1));
+        (debug_print (write 2));
+        3;
+        4
+
+    (debug_print (write a))
