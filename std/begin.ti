@@ -1,6 +1,4 @@
 
 
 def (; e1 e2)
-  let a e1
-  let b e2
   e2
