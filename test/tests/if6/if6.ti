@@ -1,0 +1,7 @@
+def (main)
+    let a (;
+        6
+        if 1 300 4
+    )
+
+    (debug_print (write a))

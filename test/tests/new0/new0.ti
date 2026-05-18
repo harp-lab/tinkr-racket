@@ -1,0 +1,6 @@
+def (main)
+    let a (new `foo 10 (lambda (x)
+        1
+    ))
+    
+    (debug_print (write a))

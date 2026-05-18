@@ -1,0 +1,7 @@
+def (main)
+    let p (prim_unique_prompt)
+    let t 2
+    let foo (lambda () p <- t)
+    let a # p (foo)
+    let b (-> a + t) + 1
+    (debug_print (write b))

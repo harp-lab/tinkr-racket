@@ -1,0 +1,8 @@
+def (main)
+    let a if 1
+            (foo 100)
+            (foo 200)
+    (debug_print (write a))
+
+def (foo x)
+    (+ x 1)

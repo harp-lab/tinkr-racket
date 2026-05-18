@@ -1,0 +1,12 @@
+def (main)
+    let a (bar (if 1
+        (foo 100)
+        (foo 200)
+    ))
+    (debug_print (write a))
+
+def (foo x)
+    (+ x 1)
+
+def (bar x)
+    (* x 120)

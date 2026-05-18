@@ -132,7 +132,7 @@
       (unless c++-attempt (error "Error: neither clang++ nor c++ not found in PATH."))
       `(c++ ,c++-attempt)]))
 
-(define (compile-cpp-to-object cpp-path header-path obj-path)
+(define (compile-cpp-to-object cpp-path header-path obj-path [debug #t])
   (spawn-safe
    (lambda ()
      (match-define `(,cxx-type ,cxx-path) (find-cxx-path))
@@ -143,10 +143,12 @@
                 "-o" obj-path
                 "-include" header-path 
                 "-std=c++20"
-          "-g"  "-DDEBUG"
+                "-g"
                 "-march=native"
+                "-w"
                 (if (equal? cxx-type 'clang++) "-ferror-limit=3" "-fmax-errors=3"))
-              (if (equal? cxx-type 'clang++) (list "-flto=thin") '())))
+              (if (equal? cxx-type 'clang++) (list "-flto=thin") '())
+              (if debug                      (list "-DDEBUG")    '())))
      ;; Copy the .o file into the build folder using the hashed dir name
      (copy-file obj-path
         (match (explode-path obj-path)

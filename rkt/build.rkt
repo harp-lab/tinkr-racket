@@ -151,7 +151,7 @@
           (loop (remove result running))))))
 
 
-(define (build-project path)
+(define (build-project path [debug #t])
 
   (define project (setup-build-workspace path))
 
@@ -189,7 +189,8 @@
 		  (compile-cpp-to-object
 		   (path->string (build-path entry (format "~a.cpp" name)))
 		   (path->string (build-path project "header.h"))
-		   (path->string (build-path entry (format "~a.o" name))))
+		   (path->string (build-path entry (format "~a.o" name)))
+       debug)
 		  #f)))
 
   ;; Wait for all threads to finish

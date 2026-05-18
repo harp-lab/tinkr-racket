@@ -1,0 +1,12 @@
+def (foo)
+    `pr <- 1;
+    55
+
+def (main)
+    let msg # `pr (foo)
+
+    let a if -> 0
+            6
+            7
+
+    (debug_print (write a))

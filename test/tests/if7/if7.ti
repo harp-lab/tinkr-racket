@@ -1,0 +1,4 @@
+def (main)
+    let a # `pr (if 1 2 3)
+
+    (debug_print (write a))

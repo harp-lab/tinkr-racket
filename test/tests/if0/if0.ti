@@ -1,0 +1,7 @@
+def (main)
+    let w 100
+    let a (foo (if w 200 400))
+    (debug_print (write a))
+
+def (foo x)
+    x + 10

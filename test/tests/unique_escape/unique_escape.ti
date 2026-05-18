@@ -1,0 +1,10 @@
+
+def (foo)
+    let p (prim_unique_prompt)
+    let b # p ((lambda (p) 97 <- p) p)
+        b
+
+def (main)
+    let a # 97 (foo)
+        a <- 50;
+        -> 5

@@ -1,0 +1,3 @@
+def (main)
+    let a [if 1 2 3]
+    (debug_print (write a))

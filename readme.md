@@ -18,4 +18,7 @@ sudp apt-get install libgmp-dev
 sudo apt-get install lld
 ```
 
-Try running `racket temp.rkt`
+- Try running `racket temp.rkt` to compile.
+- Run `/tmp/ti/out.bin` to execute the compiled program.
+- Build info can be found in the `/tmp/ti` directory.
+- Run all tests with `python test/test.py -a`. Run the script with `-h` option for more options.
