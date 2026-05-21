@@ -4,6 +4,8 @@
 
 (provide load-module)
 
+;; Returns a module:
+;;   (module <mod-name> <bless> <inline> <blessed> <lets> <defs>)
 (define (load-module path)
   (define-values (base-dir _1 _2) (split-path path))
   (define-values (_3 dir-name _4) (split-path (simplify-path base-dir)))
@@ -13,7 +15,7 @@
 
   (let loop ([ast ast]
              [bless-acc '()]
-	     [inline-acc (set)]
+	           [inline-acc (set)]
              [blessed-acc (set)]
              [let-acc (hash)]
              [def-acc (hash)])
@@ -26,7 +28,7 @@
       [`(top-level)
        `(module ,mod-name
                 ,(reverse bless-acc)
-		,(set->list inline-acc)
+                ,(set->list inline-acc)
                 ,(set->list blessed-acc)
                 ,(hash-values let-acc)
                 ,(hash->list def-acc))]

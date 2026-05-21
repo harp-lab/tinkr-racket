@@ -14,31 +14,34 @@
 
 (define (alphatize ast) 
 
+  ;; Alphatize let or def body
   (define (alphatize+ ast [env (hash)])
     (define (recur ast) (alphatize+ ast env))
     (define (resolve-id x)
        (define x+ (escape-id-for-C (hash-ref env x (lambda () x))))
        (if (eq? x+ '_u_0003d) 'v_equal x+))
+    
     (define (T-bl ast)
       (match ast
-	;; Refs that are not reserved-bl-x
-	[`(const ,_) ast]
-	[`(ref ,x) #:when (set-member? reserved-bl-x x) ast]
-	[`(ref ,x)
-	 (define x+ (resolve-id x))
-	 (when (not (hash-has-key? env x))
-	   (set! global-names (set-add global-names x+)))
-	 `(ref ,x+)]
-	;; Untagged application
-	[`(,fx ,es ...) `(,fx ,@(map T-bl es))]
-	;; Otherwise leave it alone
-	[_ ast]))
+        ;; Refs that are not reserved-bl-x
+        [`(const ,_) ast]
+        [`(ref ,x) #:when (set-member? reserved-bl-x x) ast]
+        [`(ref ,x)
+        (define x+ (resolve-id x))
+        (when (not (hash-has-key? env x))
+          (set! global-names (set-add global-names x+)))
+        `(ref ,x+)]
+        ;; Untagged application
+        [`(,fx ,es ...) `(,fx ,@(map T-bl es))]
+        ;; Otherwise leave it alone
+        [_ ast]))
+    
     (match ast
       ;; Update reference
       [`(ref ,x)
        (define x+ (resolve-id x))
        (when (not (hash-has-key? env x))
-	 (set! global-names (set-add global-names x+)))
+        (set! global-names (set-add global-names x+)))
        `(ref ,x+)]
 
       ;; No change to constants, blessed
@@ -75,7 +78,7 @@
       [`((ref ,fx) ,es ...) (map recur ast)]
 
       [_ (pretty-print ast)
-	 (error 'alphatize-error)]))
+        (error 'alphatize-error)]))
   
   (match ast
     [`(let ,lhs ,rhs)
@@ -425,21 +428,24 @@
 	 (error "lower-ast: Unknown AST")]))
   
   (define (def->blessed ast)
-      (match ast
-	[`(def ((ref ,fx) ,args ...) ,body)
-	 `(blessed ((ref ,fx) ,@args) ((ref |{}|) ,@(lower-stmt body)))]))
+    (match ast
+      [`(def ((ref ,fx) ,args ...) ,body)
+        `(blessed ((ref ,fx) ,@args) ((ref |{}|) ,@(lower-stmt body)))]))
   
-  (set! global-names (set 'v_equal '_u_0003d))
+  (set! global-names (set 'v_equal
+                          '_u_0003d)) ; Unicode name for =
   (match mod
     [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
      (set! reserved-bl-x
-	   (set-union reserved-bl-x
-	    (for/set ([(ast) (in-list inline)])
-		     (match ast [`(blessed ((ref ,fx) . ,_) ,_) fx]))))
+      (set-union reserved-bl-x
+        (for/set ([(ast) (in-list inline)])
+          (match ast [`(blessed ((ref ,fx) . ,_) ,_) fx]))))
+
      (define defs+	 ;; Simplify core code: Alpha -> ANF -> CPS 
        (foldr append '() ;; flatten (CPS may emit >1 def for each def)
 	      (for/list ([ast defs]) 
-			(cps-convert (anf-convert (alphatize ast))))))
+          (cps-convert (anf-convert (alphatize ast))))))
+
      ;; Use helpers just above to lower these defs to blessed code
      `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs+) blessed)
 	      ,(for/list ([ast lets]) (anf-convert (alphatize ast)))

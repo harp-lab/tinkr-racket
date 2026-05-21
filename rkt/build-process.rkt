@@ -14,6 +14,9 @@
 	 racket/hash
 	 racket/runtime-path)
 
+;; A helper human-readable tag for the error file produced
+;; by run-cmd. Can be set!ed before calling run-cmd.
+(define error-file-tag "")
 
 (define null-device-path
   (if (eq? (system-type) 'windows) "NUL" "/dev/null"))
@@ -46,6 +49,7 @@
 			     (format "(compile-one \"~a\")" name))
 			   folder-names))))
      
+     (set! error-file-tag (car folder-names)) ; Seperates the error files by thread
      (run-cmd (find-executable-path "racket") "-e" cmd))))
 
 
@@ -110,7 +114,7 @@
 
 (define (run-cmd prog . args)
   (define log-port (open-output-file
-		    (build-path "/tmp/ti/error.log")
+		    (build-path (format "/tmp/ti/error~a.log" error-file-tag))
 		    #:exists 'append))
   (define stdin-port (open-input-file null-device-path))
   (define-values (sp out in err)

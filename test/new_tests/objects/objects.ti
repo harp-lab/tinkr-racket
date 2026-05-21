@@ -1,0 +1,29 @@
+;; From: https://en.wikipedia.org/wiki/Multiple_dispatch#Julia
+
+def (get_size `[asteroid ,s])
+  s
+def (get_size `[spaceship ,s])
+  s
+
+def (collide_with `[asteroid ,s1] `[spaceship ,s2])
+  "a/s"
+def (collide_with `[spaceship ,s1] `[asteroid ,s2])
+  "s/a"
+def (collide_with `[spaceship ,s1] `[spaceship ,s2])
+  "s/s"
+def (collide_with `[asteroid ,s1] `[asteroid ,s2])
+  "s/s"
+
+def (collide x y)
+  if (& (< 100 (get_size x)) (< 100 (get_size y))) ;; greater than also doesn't work
+  ;;if (& (= (get_size x) 101) (= (get_size y) 300))
+    "Big boom!"
+    (collide_with x y)
+
+def (main)
+  let a (collide `[asteroid 101] `[spaceship 300])
+  let b (collide `[asteroid 10] `[spaceship 10])
+  let c (collide `[spaceship 101] `[spaceship 10])
+  (debug_print a);
+  (debug_print b);
+  (debug_print c)

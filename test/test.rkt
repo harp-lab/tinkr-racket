@@ -16,12 +16,4 @@
 
   (if test-file
     (build-project test-file (debug-mode))
-    (error "No test file specified."))
-
-
-  #;(if (= (length args) 0)
-      (error "no test file specified")
-
-      (let ([test-file (car args)])
-        (displayln (format "Building: ~a" test-file))
-        (build-project test-file))))
+    (error "No test file specified.")))

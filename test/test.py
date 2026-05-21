@@ -9,6 +9,7 @@ from subprocess import PIPE, STDOUT, Popen, TimeoutExpired
 TIMEOUT = 240
 LONG_TESTS = []
 BLACKLIST = ["test.py", "test.rkt", "files",
+             "tests", # only keep new_tests for now
 
              # opperators #, ->, <- not working yet and seem to stall/crash the tester
              "if7", "if8", "if9",
@@ -27,7 +28,9 @@ PATH_TO_TESTER_FILE = os.path.join(PATH, "test.rkt")
 PATH_TO_BINARY = os.path.join(PATH_TO_TI_DIR, "out.bin")
 PATH_TO_ERROR_LOG = os.path.join(PATH_TO_TI_DIR, "error.log")
 
-TEST_DIR_NAME = "tests"
+TEST_DIR_TESTS = "tests"
+TEST_DIR_NEW_TESTS = "new_tests"
+TEST_DIRS = [TEST_DIR_TESTS, TEST_DIR_NEW_TESTS]
 
 def _test_compiler(file, tests, racket_path):
     b_stdout, _, _ = runcmdsafe(
@@ -186,11 +189,18 @@ def list_all_tests():
     Returns:
       tests: The sorted paths of the available tests
     """
-    tests = [
-        (test, TEST_DIR_NAME)
-        for test in os.listdir(os.path.join(PATH, TEST_DIR_NAME))
-        if not test.startswith(".")
-    ]
+    tests = []
+    for test_dir in TEST_DIRS:
+        if test_dir in BLACKLIST:
+            print(f"Skipping blacklisted test directory: {test_dir}")
+            continue
+
+        tests += [
+            (test, test_dir)
+            for test in os.listdir(os.path.join(PATH, test_dir))
+            if not test.startswith(".")
+        ]
+
     tests.sort()
     return tests
 
@@ -231,8 +241,15 @@ def main():
         return
 
     if args.test:
-        path = os.path.abspath(os.path.join(PATH, TEST_DIR_NAME, args.test))
-        tests = TEST_DIR_NAME
+        all = list_all_tests()
+        if args.test not in [test[0] for test in all]:
+            print(f"Error: test {args.test} does not exist.")
+            return
+        
+        test_dir = all[[test[0] for test in all].index(args.test)][1]
+
+        path = os.path.abspath(os.path.join(PATH, test_dir, args.test))
+        tests = test_dir
         if not os.path.exists(path):
             print(f"Error: test {args.test} does not exist.")
             return
