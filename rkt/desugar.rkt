@@ -1,13 +1,14 @@
 #lang racket
 
 (require "utils.rkt"
-	 "langs.rkt")
+         "langs.rkt")
 
 (provide desugar-module)
 
-(define old-const (make-hash))
-
-
+;; Returns a desugared module:
+;;   (module <mod-name> <mod-tag> 
+;;           <bless> <all-inline> <blessed> <lets> <defs>
+;;           <methods> <types>)
 (define (desugar-module mod)
   ;; Method registry for this module
   (define method-map (hash))
@@ -33,6 +34,7 @@
   (define (method-publish-name mname otag)
     (sym-append mname (sym-append "_" otag)))
 
+  ;; Lifted and new defs
   (define lifted-defs (make-hash))
   (define (lift-def! name ast)
     (hash-set! lifted-defs name ast))
@@ -46,24 +48,26 @@
 
     (define (slice-pat x elst)
       (match elst
-        ['() `(if (bless ((ref equal) (ref empty) ,x))
-                  ,body ,fail-e)]
-	[(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
-         (desugar-pat x pat fail-e body qd)]
+        ['()
+          `(if (bless ((ref equal) (ref empty) ,x)) ,body ,fail-e)]
+        [(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
+          (desugar-pat x pat fail-e body qd)]
         [(cons e0 es)
-         (define gx0 (gensymb 'car))
-         (define gx1 (gensymb 'cdr))
-         `(let (ref ,gx0)
-            ,(desugar-ast
-              `((ref first) ,x))
-            (if (bless ((ref equal) (ref none) (ref ,gx0)))
-		,fail-e 
-		,(desugar-pat `(ref ,gx0) e0 fail-e
-                              `(let (ref ,gx1)
-				 ,(desugar-ast
-                                   `((ref rest) ,x))
-				 ,(slice-pat `(ref ,gx1) es))
-                              qd)))]))
+          (define gx0 (gensymb 'car))
+          (define gx1 (gensymb 'cdr))
+          `(let (ref
+                  ,gx0)
+              ,(desugar-ast `((ref first) ,x))
+              (if (bless ((ref equal) (ref none) (ref ,gx0)))
+                  ,fail-e
+                  ,(desugar-pat `(ref ,gx0)
+                                e0
+                                fail-e
+                                `(let (ref
+                                      ,gx1)
+                                  ,(desugar-ast `((ref rest) ,x))
+                                  ,(slice-pat `(ref ,gx1) es))
+                                qd)))]))
 
     (match pat
       ;; Quote Patterns
@@ -152,12 +156,20 @@
 
       [_ (error 'desugar-pat)]))
 
+  ;; Symbol Symbol AST -> AST
+  ;; `name` is the function's new generated name and ast is the full def.
+  ;; `failx` is the name of the next def to try if this current ones fails
+  ;;    (i.e. if the params don't match).
+  ;; `ast` is just the current def to desugar.
   (define (desugar-one-def name failx ast)
     (match ast
       [`(def ((ref ,fname) ,params ...) ,maybe-when ... ,body)
+
+       ;; (ListOf param) Int (or #f OverflowIndicator) -> (ValuesOf (ListOf Symbol) Lambda)
+       ;; Returns a list of pattern/param names and a binder lambda.
        (define (process-params ps idx overflow-x)
          (match ps
-           ['()
+           ['() ; done with params
             (cond
               [(< idx 6)
                (let ([pc (gensymb 'pad_check)])
@@ -178,6 +190,7 @@
                              `(if (bless ((ref equal) (ref empty) ,overflow-x)) ,b ,fail-ast)
                              b)))])]
            
+           ;; ellipsis case
            [(cons `((ref ,ell) ,inner-pat) rest-ps) #:when (eq? ell '|...|)
             (unless (null? rest-ps)
               (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
@@ -197,12 +210,19 @@
                         (lambda (b fail-ast)
                           (desugar-pat overflow-x inner-pat fail-ast b))))]
            
+           ;; other cases
            [(cons pat rest-ps)
+            ;; Generate param/pattern name
             (define px (match pat
                          [`(ref ,x) `(ref ,(if (eq? x '_) (gensymb '_) x))]
                          [`(const ,v) `(ref ,(gensymb 'const))]
                          [_ `(ref ,(gensymb 'pat))]))
-            (if (or (< idx 6) (eq? fname '_gather))
+            
+            ;; Cases:
+            (if (or (< idx 6)
+                    (eq? fname '_gather)) ; _gather is a special exception where the last
+                                          ; tinkr argument passes the rest of the arguments
+                                          ; as a slice instead of individually.
                 (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
                   (values (cons px rest-px)
                           (lambda (b fail-ast)
@@ -238,21 +258,24 @@
        (define sig-params
          (let loop ([pxs params-x] [sofar 1])
            (if (>= sofar bless-arg-count)
-               '()
+               '() ;; TODO: is this correct correct?
                (if (null? pxs)
                    (cons `(ref ,(gensymb '_)) (loop '() (add1 sofar)))
                    (cons (car pxs) (loop (cdr pxs) (add1 sofar)))))))
        (define fail-e `((ref ,failx) (ref ,fallback-x) ,@sig-params))
+
        `(def ((ref ,name) (ref ,fallback-x) ,@sig-params)
           ,(body-binder 
-            `(if ,(desugar-ast `((ref |&|) ,@maybe-when))
-                 ,(desugar-ast body)
-                 ,fail-e)
+            `(if ,(desugar-ast `((ref |&|) ,@maybe-when)) ; if the when exists: evaluate it otherwise the & is empty so just continue normally
+                 ,(desugar-ast body) ; if the when suceedes (or there is no when guard)
+                 ,fail-e)            ; else fail
             fail-e))]))
   
+  ;; The main desugarer
   (define (desugar-ast ast [qd 0])
     ;; Desugar expression ASTs 
     (match ast
+      ;; Ellipsis
       [`((ref ,ell) ,e0)
        #:when (eq? ell '|...|)
        `(,ell ,(desugar-ast e0 qd))]
@@ -288,7 +311,7 @@
        #:when (and (> qd 0) (symbol? tag))
        (define tag+ (private-obj-tag tag))
        `(object (ref ,tag+)
-		,@(map (lambda (e) (desugar-ast e qd)) es))]
+          ,@(map (lambda (e) (desugar-ast e qd)) es))]
 
       ;; Quoted list builder
       [`(,es ...) #:when (> qd 0)
@@ -323,8 +346,9 @@
        (define gx (gensymb 'or))
        (desugar-ast
         `(let (ref ,gx) ,e0
-              (if (ref ,gx) (ref ,gx)
-		  ((ref ,(string->symbol "|")) ,@es))))]
+              (if (ref ,gx)
+                  (ref ,gx)
+                  ((ref ,(string->symbol "|")) ,@es))))]
 
       ;; Handle simple let patterns by recuring
       [`(let (ref ,x) ,rhs ,body)
@@ -346,20 +370,20 @@
       [`(|[]|) `(ref empty)]
       [`(|[]| ,es ...)
        (define chunks
-	 (filter (lambda (e) (match e [`((ref |[]|)) #f] [_ #t]))
-		 (foldl (lambda (e0 acc)
-			  (match `(,e0 ,acc)
-			    [`(((ref ,ell) ,e1) (,old ... ,this))
-			     #:when (eq? ell '|...|)
-			     `(,@old ,this ,(desugar-ast e1) (|[]|))]
-			    [`(,e1 (,old ... ,this))
-			     `(,@old (,@this ,(desugar-ast e1)))]))
-			'((|[]|))
-			es)))
+        (filter (lambda (e) (match e [`((ref |[]|)) #f] [_ #t]))
+          (foldl (lambda (e0 acc)
+              (match `(,e0 ,acc)
+                [`(((ref ,ell) ,e1) (,old ... ,this))
+                #:when (eq? ell '|...|)
+                `(,@old ,this ,(desugar-ast e1) (|[]|))]
+                [`(,e1 (,old ... ,this))
+                `(,@old (,@this ,(desugar-ast e1)))]))
+            '((|[]|))
+            es)))
        (match chunks
-	 [`() `(ref empty)] 
-	 [`(,e0 ,es ...)
-	  (foldl (lambda (e1 e0) `((ref +) (ref none) ,e0 ,e1)) e0 es)])]
+        [`() `(ref empty)] 
+        [`(,e0 ,es ...)
+          (foldl (lambda (e1 e0) `((ref +) (ref none) ,e0 ,e1)) e0 es)])]
 
       [`((ref |{}|)) '(ref none)]
       [`((ref |{}|) ,es ... ,elast)
@@ -380,19 +404,19 @@
        (define (is-splice? e)
          (match e [`(|...| ,_) #t] [_ #f]))
        (cond
-	[(equal? ef+ '(ref raw_apply))
-        `(,ef+ ,@es+)]
-        [(ormap is-splice? es+)
-         (define arg-list (desugar-ast `(|[]| ,@es) qd))
-         `((ref _apply) (ref none) ,ef+ ,arg-list)]
-        [(< (length es+) (- bless-arg-count 2))
-         ;; Fits perfectly in a0-a5: prepend the fallback
-         `(,ef+ (ref none) ,@es+)]
-	[else ;; Overflow: gather tail into a slice
-         (define head (take es+ (- bless-arg-count 2)))
-         (define raw-tail (drop es (- bless-arg-count 2)))
-         (define residual-slice (desugar-ast `(|[]| ,@raw-tail) qd))
-         `(,ef+ (ref none) ,@head ,residual-slice)])]
+        [(equal? ef+ '(ref raw_apply))
+              `(,ef+ ,@es+)]
+              [(ormap is-splice? es+)
+              (define arg-list (desugar-ast `(|[]| ,@es) qd))
+              `((ref _apply) (ref none) ,ef+ ,arg-list)]
+              [(< (length es+) (- bless-arg-count 2))
+              ;; Fits perfectly in a0-a5: prepend the fallback
+              `(,ef+ (ref none) ,@es+)]
+        [else ;; Overflow: gather tail into a slice
+              (define head (take es+ (- bless-arg-count 2)))
+              (define raw-tail (drop es (- bless-arg-count 2)))
+              (define residual-slice (desugar-ast `(|[]| ,@raw-tail) qd))
+              `(,ef+ (ref none) ,@head ,residual-slice)])]
       
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
@@ -431,47 +455,51 @@
        (define obj (if (null? args) #f (object-method-pat? (car args))))
        (define tails (part-by-objects more))
        (hash-set tails obj
-		 (cons `(def ((ref ,name) ,@args)
-			     ,@maybe-when ,body)
-		       (hash-ref tails obj list)))]))
+        (cons `(def ((ref ,name) ,@args)
+                 ,@maybe-when ,body)
+		          (hash-ref tails obj list)))]))
   
   ;; Desugar an ordered list of defs
   (define (desugar-defs lst)
     (define parts (part-by-objects lst))
-    (foldr
+
+    (foldr ; flatten by one level
      append '()
-     (for/list
-      ([(obj-info ls) (in-hash parts)])
+     (for/list ([(obj-info ls) (in-hash parts)])
       (let loop ([ls ls]
-		 [next-x #f])
-	(match ls
-	  ['()
-	   (define params (pad-params 1))
-	   `((def ((ref ,next-x) (ref ,fallback-x) ,@params)
-		  (continue-dispatch (ref ,fallback-x) ,@params)))]
-	  [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
-	   #:when obj-info ;; This is an obj-pattern def:
-	   (match-define (cons kind obj-tag) obj-info)
-	   (define mynext (gensymb x))
-	   (define tag+ (if (eq? kind 'subword)
-			    (private-subword-tag obj-tag)
-			    (private-obj-tag obj-tag)))
-	   (define gx (if next-x next-x
-			  (let* ([gx (method-publish-name x tag+)])
-			    (register-method! x tag+ gx)
-			    gx)))
-	   (cons (desugar-one-def gx mynext (first ls))
-		 (loop more mynext))]
-	  ;; For all non-obj-pattern defs:
-	  [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
-      	   (define mynext (gensymb x))
-	   (define gx (if next-x next-x
-			  (let ([gx (gensymb x)])
-			    ;; register just this first one
-			    (register-method! x #f gx)
-			    gx)))
-	   (cons (desugar-one-def gx mynext (first ls))
-		 (loop more mynext))])))))
+		             [next-x #f])
+        (match ls
+          ['()
+            (define params (pad-params 1))
+            `((def ((ref ,next-x) (ref ,fallback-x) ,@params)
+              (continue-dispatch (ref ,fallback-x) ,@params)))]
+          [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
+            #:when obj-info ;; This is an obj-pattern def:
+            (match-define (cons kind obj-tag) obj-info)
+            (define mynext (gensymb x))
+            (define tag+ (if (eq? kind 'subword)
+                             (private-subword-tag obj-tag)
+                             (private-obj-tag obj-tag))) ;; else: (eq? kind 'object)
+            (define gx
+              (if next-x
+                  next-x
+                  (let* ([gx (method-publish-name x tag+)])
+                    (register-method! x tag+ gx)
+                    gx)))
+            (cons (desugar-one-def gx mynext (first ls))
+                  (loop more mynext))]
+          ;; For all non-obj-pattern defs:
+          [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
+            (define mynext (gensymb x))
+            (define gx
+              (if next-x
+                  next-x
+                  (let ([gx (gensymb x)])
+                    ;; register just this first one
+                    (register-method! x #f gx)
+                    gx)))
+            (cons (desugar-one-def gx mynext (first ls))
+                  (loop more mynext))])))))
 
   ;; Body of desugar-module
   (match mod
@@ -479,32 +507,31 @@
 	      ,blessed ,lets ,defs)
 
      (define defs+
-       (foldl (lambda (name defs+) ;; 2. add new/lifted defs
-		(cons (cons name (hash-ref lifted-defs name))
-		      defs+))
-              (foldl (lambda (kv defs+) ;; 1. desugar defs
-		       (append (desugar-defs (cdr kv)) defs+))
-		     '()
-		     defs)
-              (hash-keys lifted-defs)))
+      (foldl (lambda (name defs+) ;; 2. add new/lifted defs
+              (cons (cons name (hash-ref lifted-defs name)) defs+))
+             (foldl (lambda (kv defs+) ;; 1. desugar defs
+                      (append (desugar-defs (cdr kv)) defs+))
+                    '()
+                    defs)
+             (hash-keys lifted-defs)))
 
      (define init-def
        `(def ((ref ,(sym-append "entry_point_" this-mod-tag)) (ref _fb))
 	     ,(desugar-ast
 	       `((ref |{}|)
-		 ,@(map (lambda (letast)
-			 (match letast 
-			   [`(let (ref ,x) ,rhs)
-			    (define x+ (gensymb x))
-			    `(let (ref ,x+) ,rhs
-				  (bless ((ref assign)
-					  ;; hides from renaming?
-					  (const ,(format "~a"
-							  (escape-id-for-C x)))
-					  (ref ,x+))))]
-			   [_ (pretty-print letast)
-			      (error "Todo: add top-level let patterns")]))
-		       lets)))))
+            ,@(map (lambda (letast)
+                    (match letast 
+                      [`(let (ref ,x) ,rhs)
+                        (define x+ (gensymb x))
+                        `(let (ref ,x+) ,rhs
+                        (bless ((ref assign)
+                          ;; hides from renaming?
+                          (const ,(format "~a"
+                              (escape-id-for-C x)))
+                          (ref ,x+))))]
+                      [_ (pretty-print letast)
+                          (error "Todo: add top-level let patterns")]))
+                  lets)))))
 
      `(module ,name ,this-mod-tag ,bless ,all-inline
 	      ,blessed ,lets ,(cons init-def defs+)
