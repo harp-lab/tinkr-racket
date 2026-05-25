@@ -12,7 +12,7 @@
                   #:args (filename)
                   filename))
 
-  (system "rm -rf /tmp/ti") ;; optional
+  (void (system "rm -rf /tmp/ti")) ;; optional
 
   (if test-file
     (build-project test-file (debug-mode))

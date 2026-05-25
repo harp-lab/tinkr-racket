@@ -1,15 +1,14 @@
 
-
-
-
 let true = `[[bool ,(bless 256)]]
 
 let false = `[[bool ,(bless 0)]]
 
+def (write `[[bool ,x]])
+  let f "false"
+  let t "true"
+  (bless (cond (eq (s64rshift x 8) (s64rshift false 8))
+               f
+               t))
 
-
-
-
-
-
-
+def (_init_bool_from_s64 _ b)
+  `[[bool ,(bless (s64lshift b 8))]]

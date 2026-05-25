@@ -88,8 +88,8 @@
       ;; ref pattern qd>0:  
       [`(ref ,y) #:when (> qd 0)
        `(if ((ref =) (ref none) ,x ,(desugar-ast `(const ,y)))
-	    ,body
-	    ,fail-e)]
+            ,body
+            ,fail-e)]
 
       ;; ref pattern qd=0: lowers to a var ref (todo: enforce unification?)
       [`(ref _) #:when (= qd 0) body]
@@ -166,26 +166,28 @@
       [`(def ((ref ,fname) ,params ...) ,maybe-when ... ,body)
 
        ;; (ListOf param) Int (or #f OverflowIndicator) -> (ValuesOf (ListOf Symbol) Lambda)
+       ;; `overflow-x` is a name reference bound to the rest of the overflow list.
        ;; Returns a list of pattern/param names and a binder lambda.
+       ;; The binder lambda contains the built up output code to bind and unpack the overflow list.
        (define (process-params ps idx overflow-x)
          (match ps
-           ['() ; done with params
+           ['() ; done with params: add checks that there are no left over arguments
             (cond
               [(< idx 6)
                (let ([pc (gensymb 'pad_check)])
                  (values (list `(ref ,pc))
-                         (lambda (b fail-ast)
+                         (lambda (b fail-ast) ;; check that the next param doesn't exist
                            `(if (bless ((ref equal) (ref _noarg) (ref ,pc))) ,b ,fail-ast))))]
               [(= idx 6)
                (let ([pc (gensymb 'pad_check)])
                  (values (list `(ref ,pc))
-                         (lambda (b fail-ast)
+                         (lambda (b fail-ast) ;; check that the current param is empty or doesn't exist
                            `(if (bless ((ref equal) (ref _noarg) (ref ,pc)))
                                 ,b
                                 (if (bless ((ref equal) (ref empty) (ref ,pc))) ,b ,fail-ast)))))]
               [else
                (values '()
-                       (lambda (b fail-ast)
+                       (lambda (b fail-ast) ;; check that the rest of the overflow is empty
                          (if overflow-x
                              `(if (bless ((ref equal) (ref empty) ,overflow-x)) ,b ,fail-ast)
                              b)))])]
@@ -218,11 +220,11 @@
                          [`(const ,v) `(ref ,(gensymb 'const))]
                          [_ `(ref ,(gensymb 'pat))]))
             
-            ;; Cases:
-            (if (or (< idx 6)
-                    (eq? fname '_gather)) ; _gather is a special exception where the last
-                                          ; tinkr argument passes the rest of the arguments
-                                          ; as a slice instead of individually.
+            ;; 3 Cases:
+            (if (or (< idx 6) ;; 1. Fits in the first 5 tinkr arguments
+                    (eq? fname '_gather)) ; _gather is a special exception where the last argument
+                                          ; (the 6th tinkr one or 7th blessed one) passes the rest
+                                          ; of the arguments as a slice instead of individually.
                 (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
                   (values (cons px rest-px)
                           (lambda (b fail-ast)
@@ -231,30 +233,34 @@
                                 match-logic
                                 `(if (bless ((ref equal) (ref _noarg) ,px)) ,fail-ast ,match-logic)))))
                 (if (= idx 6)
+                    ;; 2. The first argument to put into the overflow list
                     (let* ([slice-x (gensymb 'overflow)]
                            [slice-ref `(ref ,slice-x)]
                            [next-slice-x (gensymb 'overflow_rest)])
                       (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
                         (values (cons slice-ref rest-px)
-                                (lambda (b fail-ast)
-                                  `(if (bless ((ref equal) (ref _noarg) ,slice-ref))
+                                (lambda (b fail-ast) ;; Builds up output code to unpack the overflow list
+                                  `(if (bless ((ref equal) (ref _noarg) ,slice-ref)) ;; Check overflow arg exists
                                        ,fail-ast
-                                       (if (bless ((ref equal) (ref empty) ,slice-ref))
+                                       (if (bless ((ref equal) (ref empty) ,slice-ref)) ;; Check not empty
                                            ,fail-ast
-                                           (let ,px ((ref first) (ref none) ,slice-ref)
-                                             (let (ref ,next-slice-x) ((ref rest) (ref none) ,slice-ref)
+                                           (let ,px ((ref first) (ref none) ,slice-ref) ;; Bind the arg to the pattern name
+                                             (let (ref ,next-slice-x) ((ref rest) (ref none) ,slice-ref) ;; Continue with the rest of the overflow list
                                                ,(desugar-pat px pat fail-ast (binder b fail-ast))))))))))
+                    ;; 3. Put the rest of the arguments in the over flow list
                     (let* ([next-slice-x (gensymb 'overflow_rest)])
                       (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
                         (values rest-px 
                                 (lambda (b fail-ast)
-                                  `(if (bless ((ref equal) (ref empty) ,overflow-x))
+                                  `(if (bless ((ref equal) (ref empty) ,overflow-x)) ;; Check not empty
                                        ,fail-ast
-                                       (let ,px ((ref first) (ref none) ,overflow-x)
-                                         (let (ref ,next-slice-x) ((ref rest) (ref none) ,overflow-x)
+                                       (let ,px ((ref first) (ref none) ,overflow-x) ;; Bind
+                                         (let (ref ,next-slice-x) ((ref rest) (ref none) ,overflow-x) ;; Continue with the rest
                                            ,(desugar-pat px pat fail-ast (binder b fail-ast)))))))))))]))
        
        (define-values (params-x body-binder) (process-params params 0 #f))
+
+       ;; These are the non-overflow params + the one overflow param list to put into the def signature
        (define sig-params
          (let loop ([pxs params-x] [sofar 1])
            (if (>= sofar bless-arg-count)
@@ -262,6 +268,8 @@
                (if (null? pxs)
                    (cons `(ref ,(gensymb '_)) (loop '() (add1 sofar)))
                    (cons (car pxs) (loop (cdr pxs) (add1 sofar)))))))
+       
+       ;; What to do if the patterns don't match: go to the next def (i.e. failx)
        (define fail-e `((ref ,failx) (ref ,fallback-x) ,@sig-params))
 
        `(def ((ref ,name) (ref ,fallback-x) ,@sig-params)
@@ -407,11 +415,11 @@
         [(equal? ef+ '(ref raw_apply))
               `(,ef+ ,@es+)]
               [(ormap is-splice? es+)
-              (define arg-list (desugar-ast `(|[]| ,@es) qd))
-              `((ref _apply) (ref none) ,ef+ ,arg-list)]
+                (define arg-list (desugar-ast `(|[]| ,@es) qd))
+                `((ref _apply) (ref none) ,ef+ ,arg-list)]
               [(< (length es+) (- bless-arg-count 2))
-              ;; Fits perfectly in a0-a5: prepend the fallback
-              `(,ef+ (ref none) ,@es+)]
+                ;; Fits perfectly in a0-a5: prepend the fallback
+                `(,ef+ (ref none) ,@es+)]
         [else ;; Overflow: gather tail into a slice
               (define head (take es+ (- bless-arg-count 2)))
               (define raw-tail (drop es (- bless-arg-count 2)))
@@ -472,7 +480,7 @@
           ['()
             (define params (pad-params 1))
             `((def ((ref ,next-x) (ref ,fallback-x) ,@params)
-              (continue-dispatch (ref ,fallback-x) ,@params)))]
+              (continue-dispatch (ref ,fallback-x) ,@params)))] ;; continue-dispatch: a special form (removed later on) that continues with the fallback
           [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
             #:when obj-info ;; This is an obj-pattern def:
             (match-define (cons kind obj-tag) obj-info)

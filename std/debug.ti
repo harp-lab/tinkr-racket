@@ -1,0 +1,8 @@
+
+blessed (_print_subword_debug x)
+{
+  do ("std::cout << \"Value: \" << $0 <<
+                    \", without tag: \" << ((u64)$0 >> (u64)8) <<
+                    \" (tag: \" << ((u64)$0 & (u64)0xFF) << \")\" << std::endl" x)
+  return 0
+}

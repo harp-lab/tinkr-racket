@@ -230,6 +230,7 @@ def (write `[big ,x]) (_init_from_cstr none (bless (_mpz_to_cstr x)))
 
 def (_init_from_int_cstr _ s) `[big ,(bless (cstr_to_mpz s))]
 
+def `[[small ,x]] < `[[small ,y]] (_init_bool_from_s64 none (bless (s64lt x y)))
 
 blessed (cstr_to_mpz s)
 {
