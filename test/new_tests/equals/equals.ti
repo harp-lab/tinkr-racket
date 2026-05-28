@@ -1,0 +1,14 @@
+
+def (= `[foo ,x] `[foo ,y])
+  false
+
+def (main)
+{
+  ;; This one calls user defined equals
+  (debug_print (write (= `[foo 5] `[foo 5])))
+
+  let x `[foo 6]
+
+  ;; This one only checks for physical/pointer equality (producing true instead of false)
+  (debug_print (write (= x x)))
+}

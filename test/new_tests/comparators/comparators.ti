@@ -1,0 +1,45 @@
+
+def (test_cases op)
+  let s1 0
+  let s2 1
+  let b1 10^50
+  let b2 10^45
+  (debug_print (write (op s1 s2)));
+  (debug_print (write (op s1 s1)));
+  (debug_print (write (op b1 s1)));
+  (debug_print (write (op s1 b1)));
+  (debug_print (write (op b1 b1)));
+  (debug_print (write (op b1 b2)))
+
+def (eq a b)
+  a = b
+
+def (neq a b)
+  a /= b
+
+def (lt a b)
+  a < b
+
+def (gt a b)
+  a > b
+
+def (lte a b)
+  a <= b
+
+def (gte a b)
+  a >= b
+
+def (main)
+  ;; Can't pass =, <, etc. directly
+  (debug_print "=");
+  (test_cases eq);
+  (debug_print "/=");
+  (test_cases neq);
+  (debug_print "<");
+  (test_cases lt);
+  (debug_print "<=");
+  (test_cases lte);
+  (debug_print ">");
+  (test_cases gt);
+  (debug_print ">=");
+  (test_cases gte)

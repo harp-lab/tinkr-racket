@@ -1,4 +1,0 @@
-
-def (main)
-    (debug_print (write (< 0 1)));
-    (debug_print (write (> 0 1)))

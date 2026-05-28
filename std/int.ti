@@ -180,13 +180,6 @@ blessed (small_pow x y)
 }
 
 
-def (= `[[small ,x]] `[[small ,y]]) (bless (equal x y)) 
-
-
-
-
-
-
 
 ;; Big-int mpz_t wrapper
 
@@ -221,16 +214,11 @@ def `[big ,x] / `[big ,y] `[big ,(bless (_mpz_div x y))]
 def `[big ,x] * `[big ,y] `[big ,(bless (_mpz_times x y))]
 def `[big ,x] % `[big ,y] `[big ,(bless (_mpz_modulo x y))]
 
-def `[big ,x] = `[big ,y] (bless (_mpz_equal x y))
-def `[big ,x] < `[big ,y] (bless (_mpz_lt x y))
-
 def `[big ,base] ^ `[[small ,exp]] `[big ,(bless (_mpz_pow base exp))]
 
 def (write `[big ,x]) (_init_from_cstr none (bless (_mpz_to_cstr x)))
 
 def (_init_from_int_cstr _ s) `[big ,(bless (cstr_to_mpz s))]
-
-def `[[small ,x]] < `[[small ,y]] (_init_bool_from_s64 none (bless (s64lt x y)))
 
 blessed (cstr_to_mpz s)
 {
@@ -268,6 +256,7 @@ blessed (_mpz_plus x y)
   return res
 }
 
+;; Unused?
 blessed (_mpz_sub_si z n)
 {
   !res = (alloc_gc 2)
@@ -318,6 +307,24 @@ blessed (_mpz_lt x y)
   if (lt (s64_t c) 0) return _true return _false
 }
 
+blessed (_mpz_lte x y)
+{
+  c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
+  if (lte (s64_t c) 0) return _true return _false
+}
+
+blessed (_mpz_gt x y)
+{
+  c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
+  if (not (lte (s64_t c) 0)) return _true return _false
+}
+
+blessed (_mpz_gte x y)
+{
+  c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
+  if (not (lt (s64_t c) 0)) return _true return _false
+}
+
 blessed (_mpz_pow base exp)
 {
   !res = (alloc_gc 2)
@@ -333,6 +340,11 @@ blessed (_mpz_equal x y)
   if (eq c 0) return _true return _false
 }
 
+blessed (_mpz_not_equal x y)
+{
+  c = (s64_t (call_2 mpz_cmp (mpz_ref x) (mpz_ref y)))
+  if (not (eq c 0)) return _true return _false
+}
 
 blessed (_mpz_to_cstr x)
 {
@@ -362,21 +374,51 @@ def `[big ,x] - `[[small ,y]]  `[big ,x] - (promote `[[small ,y]])
 def `[[small ,x]] / `[big ,y]  (promote `[[small ,x]]) / `[big ,y]
 def `[big ,x] / `[[small ,y]]  `[big ,x] / (promote `[[small ,y]])
 
+;; Comparators
+def `[[small ,x]] < `[[small ,y]] (bless (convert_bool (s64lt x y)))
 def `[[small ,x]] < `[big ,y]  (promote `[[small ,x]]) < `[big ,y]
 def `[big ,x] < `[[small ,y]]  `[big ,x] < (promote `[[small ,y]])
+def `[big ,x] < `[big ,y] (bless (_mpz_lt x y))
 
+def `[[small ,x]] <= `[[small ,y]] (bless (convert_bool (s64lte x y)))
+def `[[small ,x]] <= `[big ,y]  (promote `[[small ,x]]) <= `[big ,y]
+def `[big ,x] <= `[[small ,y]]  `[big ,x] <= (promote `[[small ,y]])
+def `[big ,x] <= `[big ,y] (bless (_mpz_lte x y))
+
+def `[[small ,x]] > `[[small ,y]] (bless (convert_bool (not (s64lte x y))))
+def `[[small ,x]] > `[big ,y]  (promote `[[small ,x]]) > `[big ,y]
+def `[big ,x] > `[[small ,y]]  `[big ,x] > (promote `[[small ,y]])
+def `[big ,x] > `[big ,y] (bless (_mpz_gt x y))
+
+def `[[small ,x]] >= `[[small ,y]] (bless (convert_bool (not (s64lt x y))))
+def `[[small ,x]] >= `[big ,y]  (promote `[[small ,x]]) >= `[big ,y]
+def `[big ,x] >= `[[small ,y]]  `[big ,x] >= (promote `[[small ,y]])
+def `[big ,x] >= `[big ,y] (bless (_mpz_gte x y))
+
+def (= `[[small ,x]] `[[small ,y]]) (bless (convert_bool (eq x y)))
 def `[[small ,x]] = `[big ,y]  `[[small ,x]] = (demote `[big ,y])
 def `[big ,x] = `[[small ,y]]  (demote `[big ,x]) = `[[small ,y]]
+def `[big ,x] = `[big ,y] (bless (_mpz_equal x y))
 
-
+def (/= `[[small ,x]] `[[small ,y]]) (bless (convert_bool (neq x y)))
+def `[[small ,x]] /= `[big ,y]  `[[small ,x]] /= (demote `[big ,y])
+def `[big ,x] /= `[[small ,y]]  (demote `[big ,x]) /= `[[small ,y]]
+def `[big ,x] /= `[big ,y] (bless (_mpz_not_equal x y))
 
 
 ;; k-ary operations
 
+def (+ x y ...)
+  x + (+ y ...)
 
+def (- x y ...)
+  x - (- y ...)
 
+def (* x y ...)
+  x * (* y ...)
 
-
+def (/ x y ...)
+  x / (/ y ...)
 
 
 

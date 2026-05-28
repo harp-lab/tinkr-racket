@@ -142,10 +142,10 @@
        (define slice-x (gensymb 'obj_sl))
        ;; why does this break if I nest it directly, vs using ttt??
        `(let (ref ttt) (bless ((ref get_object_tag) ,x))
-	     (if (bless ((ref equal) (ref ttt) (ref ,tag+)))
-		 (let (ref ,slice-x) (bless ((ref get_object_slice) ,x))
-		      ,(slice-pat `(ref ,slice-x) es))
-		 ,fail-e))]
+        (if (bless ((ref equal) (ref ttt) (ref ,tag+)))
+            (let (ref ,slice-x) (bless ((ref get_object_slice) ,x))
+              ,(slice-pat `(ref ,slice-x) es))
+            ,fail-e))]
 
       ;; List patterns
       [`((ref |[]|) ,es ...)

@@ -1,5 +1,3 @@
-
-
 ;; a standard Tinkr function declared at top-level scope
 def (tinkr_add a b) 
   a + b
@@ -27,5 +25,3 @@ def (main)
   
   ;; Output should be [30 99 250]
   (debug_print (write [res1 res2 res3]))
-
-

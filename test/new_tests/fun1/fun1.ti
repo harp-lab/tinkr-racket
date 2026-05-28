@@ -1,7 +1,4 @@
 
-
-
-
 ;; A higher-order function that takes a function pointer 'op'
 def (apply_op op a b)
   (op a b)
@@ -19,6 +16,3 @@ def (main)
 
   ;; Output should be [50 5]
   (debug_print (write [ans1 ans2]))
-
-
-

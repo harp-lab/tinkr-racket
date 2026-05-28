@@ -1,0 +1,41 @@
+
+;; Ellipsis
+def (add x y)
+  x + y
+def (add x xs ...)
+  x + (add xs ...)
+
+;; Constant patterns
+def (is_empty [])
+  true
+def (is_empty xs)
+  false
+
+def (is_5 5)
+  true
+def (is_5 x)
+  false
+
+;; Nested list ellipsis
+def (nested x [y0 y1] ...)
+  y0 + y1
+
+;; Ellipsis with objects
+def (to_slice `[line ,all ...])
+  [all ...]
+
+def (swap `[line ,x1 ,y1 ,end ...])
+  `[line ,end ... ,x1 ,y1] ;; Spread with objects
+
+def (main)
+{
+  (debug_print (write (add 1 2 3 4 5)))
+  (debug_print (write (is_empty [])))
+  (debug_print (write (is_empty [1 2 3])))
+  (debug_print (write (is_5 5)))
+  (debug_print (write (is_5 6)))
+
+  ;; Failing:
+  (debug_print (write (to_slice (swap `[line 5 6 7 8]))))
+  (debug_print (write (nested 5 [[5 6] [7 8]])))
+}

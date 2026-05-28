@@ -1,0 +1,53 @@
+
+;; Failing:
+;; - Negative literals
+;; - Some instances of % and ^
+
+def (main)
+    ;; Small numbers
+    (debug_print (write (+ 1 2)));
+    (debug_print (write (- 5 10)));
+    (debug_print (write (* 2 (- 5 10))));
+    (debug_print (write (/ 10 2)));
+    (debug_print (write (^ 2 5)));
+    ;;(debug_print (write (- 1 -2)));
+    ;;(debug_print (write -2));
+    ;;(debug_print (write (% 33 5)));
+    
+    ;; Big numbers
+    let b1 10^50 ;; should force GMP promotion
+    let b2 10^40
+    (debug_print (write (+ b1 b2)));
+    (debug_print (write (- b2 b1)));
+    (debug_print (write (* b1 b2)));
+    (debug_print (write (/ b1 b2)));
+    (debug_print (write (% b1 (+ b2 1))));
+    ;;(debug_print (write (^ b1 b2)));
+
+    ;; Mixed
+    let s1 3
+    (debug_print (write (+ b1 s1)));
+    (debug_print (write (+ s1 b1)));
+
+    (debug_print (write (- b1 s1)));
+    (debug_print (write (- s1 b1)));
+
+    (debug_print (write (* b1 s1)));
+    (debug_print (write (* s1 b1)));
+
+    (debug_print (write (/ b1 s1)));
+    (debug_print (write (/ s1 b1)));
+
+    ;;(debug_print (write (% b1 s1)));
+    ;;(debug_print (write (% s1 b1)));
+
+    (debug_print (write (^ b1 s1)));
+    ;;(debug_print (write (^ s1 b1)));
+
+    ;; k-ary
+    let nums [1 2 3 4 5]
+    (debug_print (write (+ 1 2 3)));
+    (debug_print (write (+ nums ...)));
+    (debug_print (write (- nums ...)));
+    (debug_print (write (* nums ...)));
+    (debug_print (write (/ nums ...)))

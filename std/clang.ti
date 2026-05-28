@@ -54,6 +54,7 @@ blessed (times x y) ("($0 * $1)" x y)
 blessed (div x y) ("($0 / $1)" x y)
 blessed (lte x y) ("($0 <= $1)" x y)
 blessed (lt x y) ("($0 < $1)" x y)
+blessed (not x) ("!($0)" x)
 
 blessed (rshift x n) ("($0 >> $1)" (u64_t x) (u32_t n))
 blessed (lshift x n) ("($0 << $1)" (u64_t x) (u32_t n))
@@ -67,6 +68,8 @@ blessed (bit_xor x y) ("($0 ^ $1)" (u64_t x) (u64_t y))
 blessed (eq x y) ("($0 == $1)" (u64_t x) (u64_t y))
 blessed (equal x y) (cond (eq x y) _true _false)
 blessed (neq x y) ("($0 != $1)" (u64_t x) (u64_t y))
+
+blessed (convert_bool x) (cond x _true _false)
 
 
 ;; Basic Operations (u64)
