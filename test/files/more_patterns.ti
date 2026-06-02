@@ -1,0 +1,15 @@
+
+def (all_but_last []) []
+def (all_but_last [_]) []
+def (all_but_last [x ... _]) x ;; ... not in a tail position doesn't work yet
+
+def (last []) []
+def (last [x]) x
+def (last [_ ... x]) x
+
+def (main)
+{
+  let a [1 2 3 4]
+  (debug_print (write (last a)))
+  (debug_print (write (all_but_last a)))
+}

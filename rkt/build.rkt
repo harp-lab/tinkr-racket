@@ -151,7 +151,7 @@
           (loop (remove result running))))))
 
 
-(define (build-project path [debug #t])
+(define (build-project path [debug #t] [separate-logs #f])
 
   (define project (setup-build-workspace path))
 
@@ -161,7 +161,7 @@
 
   ;; Launch ~7 independent racket processes
   ;; These tackle the initial per-module compilation
-  (define ti-comp-threads (compile-all-parallel))
+  (define ti-comp-threads (compile-all-parallel separate-logs))
   (wait-on-all-threads ti-comp-threads)
 
   ;; Compile an init module for globals

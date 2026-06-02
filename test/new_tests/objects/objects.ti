@@ -15,8 +15,7 @@ def (collide_with `[asteroid ,s1] `[asteroid ,s2])
   "s/s"
 
 def (collide x y)
-  if (& (< 100 (get_size x)) (< 100 (get_size y))) ;; greater than also doesn't work
-  ;;if (& (= (get_size x) 101) (= (get_size y) 300))
+  if (& (< 100 (get_size x)) (< 100 (get_size y)))
     "Big boom!"
     (collide_with x y)
 

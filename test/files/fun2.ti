@@ -1,0 +1,10 @@
+
+;; inner defs do not work
+def (do_some x y)
+  def (add z w)
+    (+ z w)
+  
+  (add (add x 1) y)
+
+def (main)
+  (debug_print (write (do_some 1 2)))

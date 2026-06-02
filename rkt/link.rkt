@@ -107,7 +107,7 @@
            (format "reg_passing AVXRet ~a(~a, ~a)\n{\n~a~a~a}\n\n"
                method+ std-param o-param
                (format "  DBG(\"Method call to ~a (aka ~a): \" ~a);\n" method+ method
-                   "<< a0 << \", \" << a1 << \", \"<< a2 << \", \"<< a3")
+                   "<< DBG_VALUE(a0) << \", \" << DBG_VALUE(a1) << \", \"<< DBG_VALUE(a2) << \", \"<< DBG_VALUE(a3)")
                (format "  AVXRet r = vtable_lookup(~a,a0,(any)(u64)~a_pos,0,0,0,0,0,0);\n"
                    std-arg
                    method+)

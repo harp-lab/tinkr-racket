@@ -1,0 +1,18 @@
+
+;; Ellipsis with objects
+def (to_slice `[line ,all ...])
+  [all ...]
+
+;; Ellipsis in the middle
+;;def (to_slice_except_last `[line ,all ... ,last])
+;;  [all ...]
+
+def (swap `[line ,x1 ,y1 ,end ...])
+  `[line ,end ... ,x1 ,y1] ;; Spreading/splicing with objects
+
+def (main)
+{
+  (debug_print (write (to_slice `[line 5 6 7 88])))
+  (debug_print (write (to_slice (swap `[line 5 6 7 88]))))
+  ;;(debug_print (write (to_slice_except_last `[line 1 2 3 4])))
+}

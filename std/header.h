@@ -13,26 +13,6 @@
 #include <string.h>
 
 
-/* Debug Printing
- ******************************/
-#include <iostream>
-#include <sstream>
-
-#define ATOMIC_PRINT(content) \
-    do { \
-        std::ostringstream ss_; \
-        ss_ << content << '\n'; \
-        std::cout << ss_.str() << std::flush; \
-    } while(0)
-
-#ifdef DEBUG 
-    #define DBG(x) ATOMIC_PRINT(x)
-#else // Or no-op
-    #define DBG(x) do {} while(0)
-#endif
-
-
-
 /* Simpler Type Names
 *******************************/
 typedef uint32_t u32;
@@ -47,6 +27,39 @@ typedef double f64;
 typedef const void* const __restrict__ any;
 typedef void* __restrict__ many;
 
+
+
+/* Debug Printing
+ ******************************/
+#include <iostream>
+#include <sstream>
+
+#define ATOMIC_PRINT(content) \
+    do { \
+        std::ostringstream ss_; \
+        ss_ << content << '\n'; \
+        std::cout << ss_.str() << std::flush; \
+    } while(0)
+
+#ifdef DEBUG 
+    #include <unordered_map>
+    const std::unordered_map<u64, std::string> DEBUG_TAG_MAP = {
+      { 0, "function pointer" },
+      { 1, "heap object" },
+      { 2, "slice" },
+      { 3, "unused" },
+      { 4, "unused" },
+      { 5, "unused" },
+      { 6, "subword" },
+      { 7, "unused" }
+    };
+    #define DBG(x) ATOMIC_PRINT(x)
+    #define DBG_VALUE(x) \
+      x << " (tag: " << ((u64)x & (u64)7) << ", " << DEBUG_TAG_MAP.at((u64)x & (u64)7) << ")"
+#else // Or no-op
+    #define DBG(x) do {} while(0)
+    #define DBG_VALUE(x) ""
+#endif
 
 
 /* Basic Declarations

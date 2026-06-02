@@ -33,7 +33,7 @@
        (thunk)))))
 
 ;; Spins up a new process to handle a small set of files/X folders 
-(define (spawn-compile-one folder-names)
+(define (spawn-compile-one folder-names separate-logs)
   (spawn-safe
    (lambda ()
      (define rkt-path 
@@ -49,7 +49,8 @@
 			     (format "(compile-one \"~a\")" name))
 			   folder-names))))
      
-     (set! error-file-tag (car folder-names)) ; Seperates the error files by thread
+     (when separate-logs
+      (set! error-file-tag (car folder-names))) ; Seperates the error files by thread if enabled
      (run-cmd (find-executable-path "racket") "-e" cmd))))
 
 
@@ -99,7 +100,7 @@
     #:exists 'append))
 
 
-(define (compile-all-parallel)
+(define (compile-all-parallel [separate-logs #f])
   (define files-root "/tmp/ti/files")
   (define build-root "/tmp/ti/build")
   (when (directory-exists? files-root)
@@ -109,7 +110,7 @@
 	(group-by (λ (_) (begin0 i (set! i (modulo (add1 i) 7))))
 		  dirlst))) ;; Spin up 7 worker processes:
     (for/list ([group (in-list groups)])
-	      (spawn-compile-one group))))
+	      (spawn-compile-one group separate-logs))))
 
 
 (define (run-cmd prog . args)

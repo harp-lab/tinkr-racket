@@ -1,0 +1,9 @@
+
+;; original implementation of = was faulty because of its use of demote
+def (main)
+{
+  let s 0
+  let b 8^43
+  (debug_print (+ "Does " (write s) " = " (write b) "?"));
+  (debug_print (write (= s b)))
+}

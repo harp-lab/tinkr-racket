@@ -396,13 +396,15 @@ def `[big ,x] >= `[[small ,y]]  `[big ,x] >= (promote `[[small ,y]])
 def `[big ,x] >= `[big ,y] (bless (_mpz_gte x y))
 
 def (= `[[small ,x]] `[[small ,y]]) (bless (convert_bool (eq x y)))
-def `[[small ,x]] = `[big ,y]  `[[small ,x]] = (demote `[big ,y])
-def `[big ,x] = `[[small ,y]]  (demote `[big ,x]) = `[[small ,y]]
+;;def `[[small ,x]] = `[big ,y]  `[[small ,x]] = (demote `[big ,y])
+;;def `[big ,x] = `[[small ,y]]  (demote `[big ,x]) = `[[small ,y]]
+def `[[small ,x]] = `[big ,y]  (promote `[[small ,x]]) = `[big ,y]
+def `[big ,x] = `[[small ,y]]  `[big ,x] = (promote `[[small ,y]])
 def `[big ,x] = `[big ,y] (bless (_mpz_equal x y))
 
 def (/= `[[small ,x]] `[[small ,y]]) (bless (convert_bool (neq x y)))
-def `[[small ,x]] /= `[big ,y]  `[[small ,x]] /= (demote `[big ,y])
-def `[big ,x] /= `[[small ,y]]  (demote `[big ,x]) /= `[[small ,y]]
+def `[[small ,x]] /= `[big ,y]  (promote `[[small ,x]]) /= `[big ,y]
+def `[big ,x] /= `[[small ,y]]  `[big ,x] /= (promote `[[small ,y]])
 def `[big ,x] /= `[big ,y] (bless (_mpz_not_equal x y))
 
 

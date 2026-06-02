@@ -121,19 +121,19 @@
        (define tag-x (gensymb 'tag))
        (define sub-x (gensymb 'sub))
        `(if (bless ((ref equal) ((ref get_subword_tag) ,x) (ref ,tag+)))
-	    (let (ref ,sub-x) (bless ((ref box_subword)
-				      ((ref unbox_subword) ,x)
-				      (ref _subword)))
-		 ,(desugar-pat `(ref ,sub-x) pat0 fail-e body qd))
-	    ,fail-e)]
+            (let (ref ,sub-x) (bless ((ref box_subword)
+                                        ((ref unbox_subword) ,x)
+                                        (ref _subword)))
+              ,(desugar-pat `(ref ,sub-x) pat0 fail-e body qd))
+            ,fail-e)]
 
       ;; Special value patterns (slices, functions, etc)
       [`((ref |[]|) (ref _slice) ,e0)
        (define x+ (gensymb 'slice_ptr))
        `(if (bless ((ref equal) ((ref u64bit_and) (const 7) ,x) (const 2)))
-	    (let (ref ,x+) (bless ((ref top61) ,x))
-		 ,(desugar-pat `(ref ,x+) e0 fail-e body qd))
-	    ,fail-e)]
+            (let (ref ,x+) (bless ((ref top61) ,x))
+              ,(desugar-pat `(ref ,x+) e0 fail-e body qd))
+            ,fail-e)]
       
       ;; Object patterns
       [`((ref |[]|) (ref ,tag) ,es ...)
@@ -374,20 +374,23 @@
        `(if ,(desugar-ast g) ,(desugar-ast t) ,(desugar-ast e))]
 
       [`((ref |[]|) ,es ...)
-       (desugar-ast `(|[]| ,@es) qd)]
+       (desugar-ast `(|[]| ,@es) qd)] ; Remove ref
       [`(|[]|) `(ref empty)]
       [`(|[]| ,es ...)
        (define chunks
         (filter (lambda (e) (match e [`((ref |[]|)) #f] [_ #t]))
-          (foldl (lambda (e0 acc)
+          (foldl
+            (lambda (e0 acc)
               (match `(,e0 ,acc)
                 [`(((ref ,ell) ,e1) (,old ... ,this))
-                #:when (eq? ell '|...|)
-                `(,@old ,this ,(desugar-ast e1) (|[]|))]
+                  #:when (eq? ell '|...|)
+                  `(,@old ,this ,(desugar-ast e1) (|[]|))] ;; Put e1 into it's own chunk
                 [`(,e1 (,old ... ,this))
-                `(,@old (,@this ,(desugar-ast e1)))]))
+                  `(,@old (,@this ,(desugar-ast e1)))])) ;; Keep in the same `this` chunk
             '((|[]|))
             es)))
+      
+       ;; Concatenate (i.e. splice) the chunks together
        (match chunks
         [`() `(ref empty)] 
         [`(,e0 ,es ...)
