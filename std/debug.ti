@@ -6,3 +6,6 @@ blessed (_print_subword_debug x)
                     \" (tag: \" << ((u64)$0 & (u64)0xFF) << \")\" << std::endl" x)
   return 0
 }
+
+blessed (with_print_debug_value x d) ("std::cout << \"Value: \" << $0 << std::endl; $1" d x)
+blessed (print_debug_value d) ("std::cout << \"Value: \" << $0 << std::endl; 1" d)

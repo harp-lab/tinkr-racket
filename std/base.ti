@@ -1,6 +1,6 @@
 
 
-
+include "debug.ti"
 
 include "clang.ti"
 include "stack.ti"

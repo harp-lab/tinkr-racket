@@ -1,45 +1,56 @@
 
-def (test_cases op)
+def (test_cases op k_ary)
   let s1 0
   let s2 1
   let b1 10^50
   let b2 10^45
+  let lst1 [1 2 3 4 5]
+  let lst2 [5 4 3 2 1]
+  let lst3 [1 1 1 1 1]
   (debug_print (write (op s1 s2)));
   (debug_print (write (op s1 s1)));
   (debug_print (write (op b1 s1)));
   (debug_print (write (op s1 b1)));
   (debug_print (write (op b1 b1)));
-  (debug_print (write (op b1 b2)))
+  (debug_print (write (op b1 b2)));
 
-def (eq a b)
-  a = b
+  if k_ary
+  {
+    (debug_print (write (op lst1 ...)))
+    (debug_print (write (op lst2 ...)))
+    (debug_print (write (op lst3 ...)))
+  }
+  none
 
-def (neq a b)
-  a /= b
+def (eq a ...)
+  (= a ...)
 
-def (lt a b)
-  a < b
+def (neq a ...)
+  (/= a ...)
 
-def (gt a b)
-  a > b
+def (lt a ...)
+  (< a ...)
 
-def (lte a b)
-  a <= b
+def (gt a ...)
+  (> a ...)
 
-def (gte a b)
-  a >= b
+def (lte a ...)
+  (<= a ...)
+
+def (gte a ...)
+  (>= a ...)
 
 def (main)
   ;; Can't pass =, <, etc. directly
   (debug_print "=");
-  (test_cases eq);
+  (test_cases eq false); ;; k-ary = does not work yet
   (debug_print "/=");
-  (test_cases neq);
+  (test_cases neq true);
   (debug_print "<");
-  (test_cases lt);
+  (test_cases lt true);
   (debug_print "<=");
-  (test_cases lte);
+  (test_cases lte true);
   (debug_print ">");
-  (test_cases gt);
+  (test_cases gt true);
   (debug_print ">=");
-  (test_cases gte)
+  (test_cases gte true)

@@ -138,6 +138,19 @@ blessed (small_div x y)
     return (s64lshift (s64div vx vy) 8)
 }
 
+def (% `[[small ,x]] `[[small ,y]])
+  let v = (bless (small_modulo x y))
+  if v `[[small ,v]] (% (promote `[[small ,x]]) (promote `[[small ,y]]))
+
+blessed (small_modulo x y)
+{
+  vx = (to_s56 x)
+  vy = (to_s56 y)
+  if (fits_s56 (mod (s128_t (s64_t vx)) (s128_t (s64_t vy))))
+    return _false
+    return (s64lshift (s64mod vx vy) 8)
+}
+
 def (^ `[[small ,x]] `[[small ,y]])
   let v = (bless (small_pow x y))
   if v `[[small ,v]] (^ (promote `[[small ,x]]) `[[small ,y]])
@@ -208,17 +221,12 @@ let _ = bless (seq_2 0 ("mp_set_memory_functions(&gmp_allocate_function,
 			                         &gmp_deallocate_function);"))
 
 
-def `[big ,x] + `[big ,y] `[big ,(bless (_mpz_plus x y))] 
-def `[big ,x] - `[big ,y] `[big ,(bless (_mpz_minus x y))]
-def `[big ,x] / `[big ,y] `[big ,(bless (_mpz_div x y))]
-def `[big ,x] * `[big ,y] `[big ,(bless (_mpz_times x y))]
-def `[big ,x] % `[big ,y] `[big ,(bless (_mpz_modulo x y))]
-
-def `[big ,base] ^ `[[small ,exp]] `[big ,(bless (_mpz_pow base exp))]
 
 def (write `[big ,x]) (_init_from_cstr none (bless (_mpz_to_cstr x)))
 
 def (_init_from_int_cstr _ s) `[big ,(bless (cstr_to_mpz s))]
+
+;; Big integer conversions
 
 blessed (cstr_to_mpz s)
 {
@@ -245,6 +253,8 @@ blessed (mpz_to_s56 z)
   val = (call_1 mpz_get_si (mpz_ref z))
   return (s64lshift (s64_t val) 8)
 }
+
+;; Big integer operations
 
 blessed (_mpz_plus x y)
 {
@@ -356,25 +366,38 @@ blessed (_mpz_to_cstr x)
 
 
 
-;; Mixed operations and automatic promotion
-
+;; Promotion
 
 def (promote `[[small ,z]]) `[big ,(bless (s56_to_mpz z))]
 def (demote `[big ,z]) `[[small ,(bless (mpz_to_s56 z))]]
 
+
+;; Mixed and big arithmetic operators
+
 def `[[small ,x]] + `[big ,y]  (promote `[[small ,x]]) + `[big ,y]
 def `[big ,x] + `[[small ,y]]  `[big ,x] + (promote `[[small ,y]])
+def `[big ,x] + `[big ,y] `[big ,(bless (_mpz_plus x y))] 
 
 def `[[small ,x]] * `[big ,y]  (promote `[[small ,x]]) * `[big ,y]
 def `[big ,x] * `[[small ,y]]  `[big ,x] * (promote `[[small ,y]])
+def `[big ,x] * `[big ,y] `[big ,(bless (_mpz_times x y))]
 
 def `[[small ,x]] - `[big ,y]  (promote `[[small ,x]]) - `[big ,y]
 def `[big ,x] - `[[small ,y]]  `[big ,x] - (promote `[[small ,y]])
+def `[big ,x] - `[big ,y] `[big ,(bless (_mpz_minus x y))]
 
 def `[[small ,x]] / `[big ,y]  (promote `[[small ,x]]) / `[big ,y]
 def `[big ,x] / `[[small ,y]]  `[big ,x] / (promote `[[small ,y]])
+def `[big ,x] / `[big ,y] `[big ,(bless (_mpz_div x y))]
+
+def `[[small ,x]] % `[big ,y]  (promote `[[small ,x]]) % `[big ,y]
+def `[big ,x] % `[[small ,y]]  `[big ,x] % (promote `[[small ,y]])
+def `[big ,x] % `[big ,y] `[big ,(bless (_mpz_modulo x y))]
+
+def `[big ,base] ^ `[[small ,exp]] `[big ,(bless (_mpz_pow base exp))]
 
 ;; Comparators
+
 def `[[small ,x]] < `[[small ,y]] (bless (convert_bool (s64lt x y)))
 def `[[small ,x]] < `[big ,y]  (promote `[[small ,x]]) < `[big ,y]
 def `[big ,x] < `[[small ,y]]  `[big ,x] < (promote `[[small ,y]])
@@ -410,18 +433,33 @@ def `[big ,x] /= `[big ,y] (bless (_mpz_not_equal x y))
 
 ;; k-ary operations
 
-def (+ x y ...)
-  x + (+ y ...)
+def (+ x y rest ...)
+  (+ (+ x y) rest ...)
 
-def (- x y ...)
-  x - (- y ...)
+def (- x y rest ...)
+  (- (- x y) rest ...)
 
-def (* x y ...)
-  x * (* y ...)
+def (* x y rest ...)
+  (* (* x y) rest ...)
 
-def (/ x y ...)
-  x / (/ y ...)
+def (/ x y rest ...)
+  (/ (/ x y) rest ...)
 
+;; TODO: k-ary equals does not work (probably because of v_equal)
+;;def (= x y rest ...)
+;;  (& (= x y) (= y rest ...))
 
+def (/= x y rest ...)
+  (& (/= x y) (/= x rest ...) (/= y rest ...))
 
+def (< x y rest ...)
+  (& (< x y) (< y rest ...))
 
+def (> x y rest ...)
+  (& (> x y) (> y rest ...))
+
+def (<= x y rest ...)
+  (& (<= x y) (<= y rest ...))
+
+def (>= x y rest ...)
+  (& (>= x y) (>= y rest ...))
