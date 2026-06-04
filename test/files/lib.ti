@@ -3,10 +3,18 @@ def (foldl f acc []) acc
 def (foldl f acc [x xs ...])
   (foldl f (f acc x) xs)
 
+def (map f []) []
+def (map f [x xs ...])
+  [(f x) (map f xs) ...]
+
 def (add x y)
   x + y
+
+def (add1 x)
+  x + 1
 
 def (main)
 {
   (debug_print (write (foldl add 0 [1 2 3 4 5])))
+  (debug_print (write (map add1 [1 2 3 4])))
 }

@@ -20,7 +20,7 @@
   
   (define fallback-x (gensymb 'fallback))
 
-  (define special '(_slice _fun_ptr _subword))
+  (define special '(_slice _fun_ptr _subword)) ;; TODO: do we need _fun_ptr anymore?
   (define this-mod-tag (gensymb (gensymb 'm))) 
   (define this-mod-tag-str (symbol->string this-mod-tag))
   (define (private-obj-tag tag) ;; makes tag unique to module

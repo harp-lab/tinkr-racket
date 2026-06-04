@@ -7,9 +7,14 @@ def (last []) []
 def (last [x]) x
 def (last [_ ... x]) x
 
+;; Ellipsis in the middle with objects
+def (to_slice_except_last `[line ,all ... ,last])
+  [all ...]
+
 def (main)
 {
   let a [1 2 3 4]
   (debug_print (write (last a)))
   (debug_print (write (all_but_last a)))
+  (debug_print (write (to_slice_except_last `[line 5 6 7 8])))
 }
