@@ -373,14 +373,31 @@
                      ((ref init_obj_from_slice) (ref ,target-x) (ref ,index-x) (ref ,slice-x))))
 
           new-index))
+       
+       ;; Symbol Symbol -> (ValuesOf Expr Symbol)
+       ;; Adds the length of the slice to the len-x accumulator.
+       (define (accumulate-length len-x slice-x)
+        (define new-len-x (gensymb 'len))
+        (define inter (gensymb 'inter))
+        (values
+          `(((ref =) (ref ,inter)
+                     ((ref slice_len) ((ref top61) (ref ,slice-x))))
+            ((ref =) (ref ,new-len-x)
+                     ((ref plus) ((ref u64_t) (ref ,len-x))
+                                 ((ref u64_t) (ref ,inter)))))
+          
+          new-len-x))
 
+       ;; Split into chunks: [lst1 ... elm1 elm2 lst2 ...] => [lst1 [elm1 elm2] lst2]
        (define-values (all-chunks last-chunk)
          (for/fold ([chunks '()]
                     [curr-chunk '()])
                    ([e (in-list es)])
            (match e
              [`(,ell (ref ,slice-x)) #:when (eq? ell '|...|)
-              (values (append chunks (list slice-x)) '())]
+              (if curr-chunk
+                  (values (append chunks (list (reverse curr-chunk) slice-x)) '())
+                  (values (append chunks (list slice-x)) '()))]
              
              [_ (values chunks (cons e curr-chunk))])))
 
@@ -389,31 +406,54 @@
              all-chunks
              (append all-chunks (list (reverse last-chunk)))))
 
-       (define rx (gensymb 'a))
+       (define mut-x (gensymb 'a))
        (define initial-index-x (gensymb 'init_idx))
+       (define initial-len-x (gensymb 'init_len))
 
-       ;; Generate code for populating the object with user supplied
-       ;; data starting at the initial index 
-       (define-values (code last-index)
+       ;; `code`: Generated code for populating the object with user supplied
+       ;; data starting at the initial index.
+       ;; `slice-lens-code`: Generated code for accumulating the length of all
+       ;; the slices being spliced together.
+       ;; `last-len-x`: The name of the accumulated length variable.
+       ;; `inline-vals-len`: The number of inline elements (i.e not part of a slice).
+       (define-values (code _last-index slice-lens-code last-len-x inline-vals-len)
           (for/fold ([code '()]
-                     [curr-index-x initial-index-x])
+                     [curr-index-x initial-index-x]
+                     [slice-lens-code '()]
+                     [len-x initial-len-x]
+                     [inline-vals-len 0])
                     ([chunk final-chunks])
               (cond
                 [(list? chunk) ;; Normal inline values (chunk is a list of inline values)
-                  (define-values (res-code new-i) (add-elems-directly rx chunk curr-index-x))
-                  (values (append code res-code) new-i)]
+                  (define-values (res-code new-i) (add-elems-directly mut-x chunk curr-index-x))
+                  (values (append code res-code)
+                          new-i
+                          slice-lens-code
+                          len-x
+                          (+ inline-vals-len (length chunk)))]
                 [else ;; Splicing (chunk contains the name for the slice)
-                  (define-values (res-code new-i) (add-elems-from-slice rx chunk curr-index-x))
-                  (values (append code res-code) new-i)])))
+                  (define-values (res-code new-i) (add-elems-from-slice mut-x chunk curr-index-x))
+                  (define-values (res-code-len new-len-x) (accumulate-length len-x chunk))
+
+                  (values (append code res-code)
+                          new-i
+                          (append slice-lens-code res-code-len)
+                          new-len-x
+                          inline-vals-len)])))
 
        (append
-        `(;; Allocate (mutable) space for the object
-          ((ref =) ((ref |!|) (ref ,rx))
-          ((ref alloc) (const 6)))
+        `(;; Calculate length of the object
+          ((ref =) (ref ,initial-len-x) (const ,(+ inline-vals-len 1))) ;; plus 1 for the extra 0th word
+          ,@slice-lens-code
+          ;; Now `last-len-x` contains the length of the object
+
+          ;; Allocate (mutable) space for the object
+          ((ref =) ((ref |!|) (ref ,mut-x))
+                   ((ref alloc) ((ref u64_t) (ref ,last-len-x))))
 
           ;; Init the object with data:
           ;; First datum: Q: the vtable?
-          (do ((ref init_obj) (ref ,rx) (const 0)
+          (do ((ref init_obj) (ref ,mut-x) (const 0)
                 ((ref obj_head_word)
                 (const ,(length es))
                 (ref ,(sym-append tag "_vtable")))))
@@ -425,7 +465,7 @@
           ,@code
         
           ;; Make immutable and tag as an object (object tag is 1)
-          ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
+          ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,mut-x)) (const 1)))
 
           ;; Continue
           ,@(recur body)))]
