@@ -152,23 +152,26 @@
     ;; Handle inline expression calls
     [`((ref ,fx) ,args ...)
      #:when (hash-has-key? inline-h fx)
+
      (match (hash-ref inline-h fx)
        [`(blessed ((ref ,_) ,params ...) ,body)
-	#:when (= (length params) (length args))
-	((simplify-blessed-expr inline-h)
-	 body
-	 (foldl (lambda (p a env)
-		  (match p [`(ref ,px) (hash-set env px a)]))
-		env
-		params
-		(map recur args)))]
+          #:when (= (length params) (length args))
+        ((simplify-blessed-expr inline-h)
+          body
+          (foldl
+            (lambda (p a env)
+              (match p [`(ref ,px) (hash-set env px a)]))
+            env
+            params
+            (map recur args)))]
        [_ (error "Inline Function ~a does not match call ~a"
-		 (hash-ref inline-h fx) ast)])]
+                 (hash-ref inline-h fx) ast)])]
 
     [_ (error (format "simplify-blessed-expr: unknown expression ~a" ast))]))
 
 
-(define ((simplify-blessed-ast inline-h) ast [env (hash)]) 
+(define ((simplify-blessed-ast inline-h) ast [env (hash)])
+  ;; TODO: recur and t-expr look like duplicates
   (define (recur ast) ((simplify-blessed-ast inline-h) ast env))
   (define (t-expr ast) ((simplify-blessed-expr inline-h) ast env))
   (define mut-vars (collect-mut ast))

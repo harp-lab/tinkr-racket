@@ -1,6 +1,10 @@
 
 let empty_set = `[set]
 
+def (= `[set] `[set]) true
+def (= `[set ,x ,xs ...] `[set ,y ,ys ...])
+  (& (= x y) (= `[set ,xs ...] `[set ,ys ...]))
+
 def (slice_to_set []) empty_set
 def (slice_to_set [xs ...])
   `[set ,xs ...]

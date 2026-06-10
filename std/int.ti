@@ -463,3 +463,10 @@ def (<= x y rest ...)
 
 def (>= x y rest ...)
   (& (>= x y) (>= y rest ...))
+
+
+;; int predicate
+
+def (int `[[small ,x]]) true
+def (int `[big ,x]) true
+def (int x) false

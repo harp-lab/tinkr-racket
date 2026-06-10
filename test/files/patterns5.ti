@@ -1,0 +1,78 @@
+
+def (write `[set])
+  "set"
+
+def (test1 (& xs `[set]) ...)
+  xs
+def (test1 xs ...)
+  false
+
+def (test2 (& xs [`[set]]) ...)
+  xs
+def (test2 xs ...)
+  false
+
+def (test3 [(& xs `[set]) ...])
+  xs
+def (test3 xs ...)
+  false
+
+def (test4 [(& xs [`[set]]) ...])
+  xs
+def (test4 xs ...)
+  false
+
+def (test5 `[outer ,(& xs `[set]) ...])
+  xs
+def (test5 xs ...)
+  false
+
+
+def (map f [] ...) []
+def (map [f [xs lsts ...] ...])
+  [(f xs ...) (map [f lsts ...]) ...]
+
+
+def (add x y)
+  x + y
+
+def (main)
+{
+  (debug_print "Map:")
+  ;;(debug_print (write (map add [1 2 3] [5 4 3]))) ;; Error
+  (debug_print (write (map [add [1 2 3] [5 4 3]])))
+
+  (debug_print "Test 1:")
+  (debug_print (write (test1 `[set])))
+  (debug_print (write (test1 [`[set]])))
+  (debug_print (write (test1 `[set] `[set] `[set])))
+  (debug_print (write (test1 [`[set] `[set] `[set]])))
+  (debug_print (write (test1 [`[set] 2 3])))
+
+  (debug_print "Test 2:")
+  (debug_print (write (test2 `[set]))) ;; Works
+  (debug_print (write (test2 [`[set]])))
+  (debug_print (write (test2 `[set] `[set] `[set])))
+  (debug_print (write (test2 [`[set] `[set] `[set]])))
+  (debug_print (write (test2 [`[set] 2 3])))
+
+  (debug_print "Test 3:")
+  (debug_print (write (test3 `[set]))) ;; Works
+  (debug_print (write (test3 [`[set]])))
+  (debug_print (write (test3 `[set] `[set] `[set])))
+  (debug_print (write (test3 [`[set] `[set] `[set]])))
+  (debug_print (write (test3 [`[set] 2 3])))
+
+  (debug_print "Test 4:")
+  ;;(debug_print (write (test4 `[set]))) ;; Error
+  (debug_print (write (test4 [`[set]]))) ;; Works
+  ;;(debug_print (write (test4 `[set] `[set] `[set]))) ;; Error
+  (debug_print (write (test4 [`[set] `[set] `[set]])))
+  (debug_print (write (test4 [`[set] 2 3])))
+
+  (debug_print "Test 5:")
+  (debug_print (write (test5 `[set])))
+  (debug_print (write (test5 `[outer `[set]])))
+  (debug_print (write (test5 `[outer `[set] `[set] `[set]])))
+  (debug_print (write (test5 `[outer `[set] 2 3])))
+}

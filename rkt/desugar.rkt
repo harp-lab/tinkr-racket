@@ -151,6 +151,17 @@
       [`((ref |[]|) ,es ...)
        (slice-pat x es)]
 
+      ;; ? patterns
+      [`((ref |?|) (ref ,pat) (ref ,pred))
+       #:when (= qd 0)
+
+       (define eval-pred
+        `(if ((ref ,pred) (ref none) (ref ,pat))
+             ,body
+             ,fail-e))
+
+       (desugar-pat x `(ref ,pat) fail-e eval-pred qd)]
+
       [`(,es ...) #:when (> qd 0)
        (slice-pat x es)]
 
