@@ -1,8 +1,14 @@
 
 def (main)
-    (debug_print (write true));
-    (debug_print (write false));
-    (debug_print (write (< 0 1)));
-    (debug_print (write (< 1 0)));
-    (debug_print (write (| (& true false) (& true true))));
+{
+    (debug_print (write true))
+    (debug_print (write false))
+    (debug_print (write (< 0 1)))
+    (debug_print (write (< 1 0)))
+    (debug_print (write (| (& true false) (& true true))))
     (debug_print (write (| (& true true false true) (& false false (| false false true false)))))
+    (debug_print (write (not true)))
+    (debug_print (write (not false)))
+    (debug_print (write (not [])))
+    (debug_print (write (not 123)))
+}

@@ -3,6 +3,7 @@
 ;; Printing
 
 
+def (write ,empty) "[]"
 def (write x=`[_slice ,_])  { "[" + (write_slice x) } + "]"
 def (write_slice x)
   let rst = (rest x)
@@ -38,6 +39,12 @@ blessed (slice_rest ptr)
       return (u64plus 2 ptr1)
 }
 
+def (is_empty ,empty) true
+def (is_empty `[_slice ,ptr]) false
+
+def (is_slice ,empty) true
+def (is_slice `[_slice ,ptr]) true
+def (is_slice x) false
 
 ;; Concatenation
 

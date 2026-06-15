@@ -164,9 +164,10 @@ blessed (fail_locally fallback a0 a1 a2 a3 a4 a5 a6)
 }
 
 
-
-
-
-
-
+def (_foldl f acc lst)
+{
+  if (| (is_empty lst) (not acc))
+    acc
+    (_foldl f (f (first lst) acc) (rest lst))
+}
 

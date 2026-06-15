@@ -39,6 +39,87 @@
   (define (lift-def! name ast)
     (hash-set! lifted-defs name ast))
 
+  ;; Expr Expr -> Expr
+  ;; For debuging purposes.
+  (define (with-print-debug ast val-ast)
+    `((ref |;|) (ref none)
+          ((ref debug_print) (ref none) ((ref write) (ref none) ,val-ast))
+          ,ast))
+
+  ;; Expr -> (SetOf Symbol)
+  (define (gather-pattern-variables pat [qd 0])
+    (define (recur-pats pats)
+      (foldl (lambda (p st) (set-union st (gather-pattern-variables p qd))) (set) pats))
+
+    (match pat
+      ;; Quotes
+      [`((ref |`|) ,pat0)
+       (gather-pattern-variables pat0 (+ qd 1))]
+      [`((ref |,|) ,pat0) #:when (= qd 0)
+       (set)]
+      [`((ref |,|) ,pat0)
+       (gather-pattern-variables pat0 (- qd 1))]
+      
+      ;; Constants
+      [`(const ,v)
+       (set)]
+
+      ;; ref pattern qd>0 
+      [`(ref ,x) #:when (> qd 0)
+       (set)]
+
+      ;; ref pattern qd=0
+      [`(ref _) #:when (= qd 0) (set)]
+      [`(ref ,x) #:when (= qd 0)
+       (set x)]
+
+      ;; = and &
+      [`((ref =) (ref ,px) ,pats ...)
+       (set-add (recur-pats pats) px)] ;; TODO: disallow/allow other pvs other than px?
+      [`((ref |&|) ,pats ...)
+        (recur-pats pats)]
+      
+      ;; Subwords
+      [`((ref |[]|) ((ref |[]|) (ref ,tag) ,pat0))
+        (gather-pattern-variables pat0 qd)]
+
+      ;; _slice
+      [`((ref |[]|) (ref _slice) ,pat0)
+        (gather-pattern-variables pat0 qd)]
+
+      ;; Objects
+      [`((ref |[]|) (ref ,tag) ,pats ...)
+       #:when (and (> qd 0) (symbol? tag))
+        (recur-pats pats)]
+      
+      ;; Slices
+      [`((ref |[]|) ,pats ...)
+        (recur-pats pats)]
+      
+      ;; ? patterns
+      [`((ref |?|) (ref ,px) (ref ,pred))
+       (set px)]
+
+      ;; ... patterns
+      [`((ref ,ell) ,pat0) #:when (eq? ell '|...|)
+        (gather-pattern-variables pat0 qd)]
+      
+      [_
+        (displayln (format "gather-pattern-variables missing case for pattern: ~a" pat))
+        (error 'gather-pattern-variables-error)]))
+
+  ;; Symbol (ListOf Symbol) Expr -> Expr
+  (define (unpack-accs accs-x pvs body)
+    (match pvs
+      ['() body]
+      [`(,a)
+        `(let (ref ,a) ((ref first) (ref none) (ref ,accs-x))
+           ,body)]
+      [`(,a . ,b)
+        `(let (ref ,a) ((ref first) (ref none) (ref ,accs-x))
+          (let (ref ,accs-x) ((ref rest) (ref none) (ref ,accs-x))
+            ,(unpack-accs accs-x b body)))]))
+
   ;; desugar-pat
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`)
   ;; body and fail-e must already be desugared
@@ -50,8 +131,49 @@
       (match elst
         ['()
           `(if (bless ((ref equal) (ref empty) ,x)) ,body ,fail-e)]
+        
+        ;; Simple ref with ...
+        [(list `((ref ,ell) (ref ,pat))) #:when (eq? ell '|...|)
+          (desugar-pat x `(ref ,pat) fail-e body qd)]
+        
+        ;; Complex pattern with ...
         [(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
-          (desugar-pat x pat fail-e body qd)]
+          (define pvs (set->list (gather-pattern-variables pat qd))) ;; TODO: Temp cast (should this be a list or set?)
+
+          (define accs-x (gensymb 'accs))
+          (define elm-x (gensymb 'elm))
+          (define pvs^ (map (lambda (pv) (gensymb pv)) pvs))
+
+          ;; Initial accs: [[] [] [] ...]
+          (define initial-accs
+            (cons '|[]|
+              (for/fold ([accs '()])
+                        ([_ pvs])
+                (cons '(|[]|) accs))))
+
+          ;; Code for updating the accs with newly bound vars in the subpattern `pat`
+          (define update-accs
+            (for/list ([pv pvs]
+                       [pv^ pvs^])
+              `((ref +) (ref none) (ref ,pv^) (|[]| (ref ,pv)))))
+          
+          (define lambda-x (gensymb 'lambda_def))
+          (define lam-def
+            `(def ((ref ,lambda-x) (ref ,fallback-x) (ref ,elm-x) (ref ,accs-x))
+              ,(desugar-pat `(ref ,elm-x) pat `(ref false)
+                  (unpack-accs accs-x pvs^
+                    `(|[]| ,@update-accs))
+                  qd)))
+
+          (lift-def! lambda-x lam-def)
+
+          `(if ((ref is_slice) (ref none) ,x)
+            (let (ref ,accs-x) ((ref _foldl) (ref none) (ref ,lambda-x) ,initial-accs ,x)
+                (if (ref ,accs-x)
+                  ,(unpack-accs accs-x pvs body)
+                  ,fail-e))
+            ,fail-e)]
+        
         [(cons e0 es)
           (define gx0 (gensymb 'car))
           (define gx1 (gensymb 'cdr))
@@ -530,7 +652,7 @@
 
      (define defs+
       (foldl (lambda (name defs+) ;; 2. add new/lifted defs
-              (cons (cons name (hash-ref lifted-defs name)) defs+))
+              (cons (hash-ref lifted-defs name) defs+))
              (foldl (lambda (kv defs+) ;; 1. desugar defs
                       (append (desugar-defs (cdr kv)) defs+))
                     '()
