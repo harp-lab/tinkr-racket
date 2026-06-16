@@ -1,0 +1,131 @@
+
+def (write `[set])
+  "set"
+
+
+def (test1 [[x] ...])
+  x
+def (test1 xs ...)
+  false
+
+def (test2 (& xs `[set]) ...)
+  xs
+def (test2 xs ...)
+  false
+
+def (test3 [(& xs `[set]) ...])
+  xs
+def (test3 xs ...)
+  false
+
+;; Nested ... patterns
+def (test4 [(& lsts [(& xs `[set]) ...]) ...])
+{
+  (debug_print (write lsts))
+  xs
+}
+def (test4 xs ...)
+  false
+
+def (test5 `[outer ,(& xs `[set]) ...])
+  xs
+def (test5 xs ...)
+  false
+
+def (test6 [[(? xs int) ...] ...])
+  xs
+def (test6 xs ...)
+  false
+
+def (test7 (= xs 5) ...)
+  xs
+def (test7 xs ...)
+  false
+
+def (test8 [_ _ _ xs ...] ...)
+  xs
+def (test8 xs ...)
+  false
+
+
+;; Map and foldl
+def (map f [] ...) []
+def (map f [xs lsts ...] ...)
+  [(f xs ...) (map f lsts ...) ...]
+
+def (foldl f acc [] ...) acc
+def (foldl f acc [xs lsts ...] ...)
+  (foldl f (f xs ... acc) lsts ...)
+
+def (add1 x)
+  (+ x 1)
+
+def (add x y)
+  (+ x y)
+
+def (add3 x y z)
+  (+ x y z)
+
+def (main)
+{
+  (debug_print "Test 1:")
+  (debug_print (write (test1 [[1] [2]])))
+  (debug_print (write (test1 `[set])))
+  (debug_print (write (test1 [])))
+  (debug_print (write (test1 [[1] [2 3]])))
+
+  (debug_print "Test 2:")
+  (debug_print (write (test2 `[set])))
+  (debug_print (write (test2 `[set] `[set])))
+  (debug_print (write (test2 [])))
+  (debug_print (write (test2 [`[set] `[set] `[set]])))
+  (debug_print (write (test2 [`[set] 2 3])))
+
+  (debug_print "Test 3:")
+  (debug_print (write (test3 `[set])))
+  (debug_print (write (test3 `[set] `[set])))
+  (debug_print (write (test3 [])))
+  (debug_print (write (test3 [`[set] `[set] `[set]])))
+  (debug_print (write (test3 [`[set] 2 3])))
+
+  (debug_print "Test 4:")
+  (debug_print (write (test4 [[`[set] `[set] `[set]]
+                              [`[set] `[set] `[set]]
+                              [`[set] `[set] `[set]]])))
+  (debug_print (write (test4 [[`[set] `[set] `[set]]
+                              [`[set] `[set] 1]
+                              [`[set] `[set] `[set]]])))
+  (debug_print (write (test4 [`[set]])))
+
+  (debug_print "Test 5:")
+  (debug_print (write (test5 `[set])))
+  (debug_print (write (test5 `[outer `[set]])))
+  (debug_print (write (test5 `[outer `[set] `[set] `[set]])))
+  (debug_print (write (test5 `[outer `[set] 2 3])))
+
+  (debug_print "Test 6:")
+  (debug_print (write (test6 1)))
+  (debug_print (write (test6 [[1 2 3]
+                              [4 5 6]])))
+  (debug_print (write (test6 [[1 2 3]
+                              [4 false 6]])))
+
+  (debug_print "Test 7:")
+  (debug_print (write (test7 5)))
+  (debug_print (write (test7 5 5 5 5)))
+  (debug_print (write (test7)))
+  (debug_print (write (test7 1 2 3)))
+
+  (debug_print "Test 8:")
+  (debug_print (write (test8 [1 1 1 2 3 4] [1 2 3 4 5 6])))
+  (debug_print (write (test8 [1 2 3] [4 5])))
+
+  (debug_print "Map:")
+  (debug_print (write (map add1 [])))
+  (debug_print (write (map add1 [1 2 3 4])))
+  (debug_print (write (map add [1 2 3 4] [4 3 2 1])))
+
+  (debug_print "Foldl:")
+  (debug_print (write (foldl add 0 [1 2 3 4])))
+  (debug_print (write (foldl add3 0 [1 2 3 4] [4 3 2 1])))
+}

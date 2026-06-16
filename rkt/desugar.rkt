@@ -105,7 +105,7 @@
         (gather-pattern-variables pat0 qd)]
       
       [_
-        (displayln (format "gather-pattern-variables missing case for pattern: ~a" pat))
+        (displayln (format "gather-pattern-variables failed for pattern: ~a" pat))
         (error 'gather-pattern-variables-error)]))
 
   ;; Symbol (ListOf Symbol) Expr -> Expr
@@ -142,7 +142,7 @@
 
           (define accs-x (gensymb 'accs))
           (define elm-x (gensymb 'elm))
-          (define pvs^ (map (lambda (pv) (gensymb pv)) pvs))
+          (define pvs^ (map (lambda (pv) (gensymb pv)) pvs)) ; Names for the accumulators
 
           ;; Initial accs: [[] [] [] ...]
           (define initial-accs
@@ -271,7 +271,9 @@
 
       ;; List patterns
       [`((ref |[]|) ,es ...)
-       (slice-pat x es)]
+        `(if ((ref is_slice) (ref none) ,x) ;; TODO: possibly allow [] patterns to match any iterable
+             ,(slice-pat x es)
+             ,fail-e)]
 
       ;; ? patterns
       [`((ref |?|) (ref ,pat) (ref ,pred))
@@ -287,7 +289,9 @@
       [`(,es ...) #:when (> qd 0)
        (slice-pat x es)]
 
-      [_ (error 'desugar-pat)]))
+      [_ 
+        (displayln (format "desugar-pat failed for pattern: ~a" pat))
+        (error 'desugar-pat)]))
 
   ;; Symbol Symbol AST -> AST
   ;; `name` is the function's new generated name and ast is the full def.
@@ -340,10 +344,10 @@
                           (lambda (b fail-ast)
                             `(let (ref ,rest-name) 
                                ((ref _gather) (ref none) ,@gather-refs ,@pad-noargs (ref ,slice-var))
-                               ,(desugar-pat `(ref ,rest-name) inner-pat fail-ast b)))))
+                               ,(desugar-pat `(ref ,rest-name) `((ref |[]|) ((ref ,ell) ,inner-pat)) fail-ast b)))))
                 (values '()
                         (lambda (b fail-ast)
-                          (desugar-pat overflow-x inner-pat fail-ast b))))]
+                          (desugar-pat overflow-x `((ref |[]|) ((ref ,ell) ,inner-pat)) fail-ast b))))]
            
            ;; other cases
            [(cons pat rest-ps)

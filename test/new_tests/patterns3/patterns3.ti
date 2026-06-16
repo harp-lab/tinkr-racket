@@ -1,10 +1,10 @@
 def `[vec] + (& v `[vec ,a ...]) v
 def (& v `[vec ,a ...]) + `[vec] v
-def `[vec ,(? a int) ...] + `[vec ,(? b int) ...] ;; ? doesn't work yet
-  [,a ... ,b ...]
+def `[vec ,(? a int) ...] + `[vec ,(? b int) ...]
+  `[vec ,a ... ,b ...]
 
 def (write `[vec ,xs ...]) 
-  "`[vec" + (foldl (lambda (acc x) (+ acc " " (write x))) "" xs) + "]" ;; lambdas don't work yet either
+  "`[vec" + (foldl (lambda (acc x) (+ acc " " (write x))) "" xs) + "]" ;; lambdas don't work yet
 
 def (to_slice `[vec ,xs ...])
   xs

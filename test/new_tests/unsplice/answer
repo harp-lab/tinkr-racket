@@ -1,0 +1,46 @@
+Test 1:
+[1 2]
+false
+[]
+false
+Test 2:
+[set]
+[set set]
+false
+false
+false
+Test 3:
+false
+false
+[]
+[set set set]
+false
+Test 4:
+[[set set set] [set set set] [set set set]]
+[[set set set] [set set set] [set set set]]
+false
+false
+Test 5:
+false
+[set]
+[set set set]
+false
+Test 6:
+false
+[[1 2 3] [4 5 6]]
+false
+Test 7:
+[5]
+[5 5 5 5]
+[]
+false
+Test 8:
+[[2 3 4] [4 5 6]]
+false
+Map:
+[]
+[2 3 4 5]
+[5 5 5 5]
+Foldl:
+10
+20

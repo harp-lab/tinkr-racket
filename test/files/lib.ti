@@ -1,11 +1,11 @@
 
-def (foldl f acc []) acc
-def (foldl f acc [x xs ...])
-  (foldl f (f acc x) xs)
+def (foldl f acc [] ...) acc
+def (foldl f acc [xs lsts ...] ...)
+  (foldl f (f xs ... acc) lsts ...)
 
-def (map f []) []
-def (map f [x xs ...])
-  [(f x) (map f xs) ...]
+def (map f [] ...) []
+def (map f [xs lsts ...] ...)
+  [(f xs ...) (map f lsts ...) ...]
 
 def (add x y)
   x + y
