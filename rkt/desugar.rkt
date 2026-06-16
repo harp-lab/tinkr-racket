@@ -120,76 +120,77 @@
           (let (ref ,accs-x) ((ref rest) (ref none) (ref ,accs-x))
             ,(unpack-accs accs-x b body)))]))
 
-  ;; desugar-pat
+  ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`) which should be a slice
+  ;; pats is a (ListOf Patterns)
+  ;; body and fail-e must already be desugared
+  (define (desugar-pats x pats fail-e body [qd 0])
+    (match pats
+      ['()
+        `(if (bless ((ref equal) (ref empty) ,x)) ,body ,fail-e)]
+      
+      ;; Simple ref with ...
+      [(list `((ref ,ell) (ref ,pat))) #:when (eq? ell '|...|)
+        (desugar-pat x `(ref ,pat) fail-e body qd)]
+      
+      ;; Complex pattern with ...
+      [(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
+        (define pvs (set->list (gather-pattern-variables pat qd))) ;; TODO: Temp cast (should this be a list or set?)
+
+        (define accs-x (gensymb 'accs))
+        (define elm-x (gensymb 'elm))
+        (define pvs^ (map (lambda (pv) (gensymb pv)) pvs)) ; Names for the accumulators
+
+        ;; Initial accs: [[] [] [] ...]
+        (define initial-accs
+          (cons '|[]|
+            (for/fold ([accs '()])
+                      ([_ pvs])
+              (cons '(|[]|) accs))))
+
+        ;; Code for updating the accs with newly bound vars in the subpattern `pat`
+        (define update-accs
+          (for/list ([pv pvs]
+                      [pv^ pvs^])
+            `((ref +) (ref none) (ref ,pv^) (|[]| (ref ,pv)))))
+        
+        (define lambda-x (gensymb 'lambda_def))
+        (define lam-def
+          `(def ((ref ,lambda-x) (ref ,fallback-x) (ref ,elm-x) (ref ,accs-x))
+            ,(desugar-pat `(ref ,elm-x) pat `(ref false)
+                (unpack-accs accs-x pvs^
+                  `(|[]| ,@update-accs))
+                qd)))
+
+        (lift-def! lambda-x lam-def)
+
+        `(if ((ref is_slice) (ref none) ,x)
+          (let (ref ,accs-x) ((ref _foldl) (ref none) (ref ,lambda-x) ,initial-accs ,x)
+              (if (ref ,accs-x)
+                ,(unpack-accs accs-x pvs body)
+                ,fail-e))
+          ,fail-e)]
+      
+      [(cons e0 es)
+        (define gx0 (gensymb 'car))
+        (define gx1 (gensymb 'cdr))
+        `(let (ref
+                ,gx0)
+            ,(desugar-ast `((ref first) ,x))
+            (if (bless ((ref equal) (ref none) (ref ,gx0)))
+                ,fail-e
+                ,(desugar-pat `(ref ,gx0)
+                              e0
+                              fail-e
+                              `(let (ref
+                                    ,gx1)
+                                ,(desugar-ast `((ref rest) ,x))
+                                ,(desugar-pats `(ref ,gx1) es fail-e body qd))
+                              qd)))]))
+
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`)
   ;; body and fail-e must already be desugared
   (define (desugar-pat x pat fail-e body [qd 0])
-
     (define recur (lambda (pat0) (desugar-pat x pat0 fail-e body qd)))
-
-    (define (slice-pat x elst)
-      (match elst
-        ['()
-          `(if (bless ((ref equal) (ref empty) ,x)) ,body ,fail-e)]
-        
-        ;; Simple ref with ...
-        [(list `((ref ,ell) (ref ,pat))) #:when (eq? ell '|...|)
-          (desugar-pat x `(ref ,pat) fail-e body qd)]
-        
-        ;; Complex pattern with ...
-        [(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
-          (define pvs (set->list (gather-pattern-variables pat qd))) ;; TODO: Temp cast (should this be a list or set?)
-
-          (define accs-x (gensymb 'accs))
-          (define elm-x (gensymb 'elm))
-          (define pvs^ (map (lambda (pv) (gensymb pv)) pvs)) ; Names for the accumulators
-
-          ;; Initial accs: [[] [] [] ...]
-          (define initial-accs
-            (cons '|[]|
-              (for/fold ([accs '()])
-                        ([_ pvs])
-                (cons '(|[]|) accs))))
-
-          ;; Code for updating the accs with newly bound vars in the subpattern `pat`
-          (define update-accs
-            (for/list ([pv pvs]
-                       [pv^ pvs^])
-              `((ref +) (ref none) (ref ,pv^) (|[]| (ref ,pv)))))
-          
-          (define lambda-x (gensymb 'lambda_def))
-          (define lam-def
-            `(def ((ref ,lambda-x) (ref ,fallback-x) (ref ,elm-x) (ref ,accs-x))
-              ,(desugar-pat `(ref ,elm-x) pat `(ref false)
-                  (unpack-accs accs-x pvs^
-                    `(|[]| ,@update-accs))
-                  qd)))
-
-          (lift-def! lambda-x lam-def)
-
-          `(if ((ref is_slice) (ref none) ,x)
-            (let (ref ,accs-x) ((ref _foldl) (ref none) (ref ,lambda-x) ,initial-accs ,x)
-                (if (ref ,accs-x)
-                  ,(unpack-accs accs-x pvs body)
-                  ,fail-e))
-            ,fail-e)]
-        
-        [(cons e0 es)
-          (define gx0 (gensymb 'car))
-          (define gx1 (gensymb 'cdr))
-          `(let (ref
-                  ,gx0)
-              ,(desugar-ast `((ref first) ,x))
-              (if (bless ((ref equal) (ref none) (ref ,gx0)))
-                  ,fail-e
-                  ,(desugar-pat `(ref ,gx0)
-                                e0
-                                fail-e
-                                `(let (ref
-                                      ,gx1)
-                                  ,(desugar-ast `((ref rest) ,x))
-                                  ,(slice-pat `(ref ,gx1) es))
-                                qd)))]))
 
     (match pat
       ;; Quote Patterns
@@ -233,8 +234,8 @@
       [`((ref |[]|) ((ref |[]|) (ref _subword) ,pat0))
        (define x+ (gensymb 'subword))
        `(if (bless ((ref equal) (ref _subword) ((ref get_subword_tag) ,x)))
-	    ,(desugar-pat x pat0 fail-e body qd)
-	    ,fail-e)]
+            ,(desugar-pat x pat0 fail-e body qd)
+            ,fail-e)]
       
       ;; Subword patterns for a single 56bit int
       [`((ref |[]|) ((ref |[]|) (ref ,tag) ,pat0))
@@ -266,13 +267,13 @@
        `(let (ref ttt) (bless ((ref get_object_tag) ,x))
         (if (bless ((ref equal) (ref ttt) (ref ,tag+)))
             (let (ref ,slice-x) (bless ((ref get_object_slice) ,x))
-              ,(slice-pat `(ref ,slice-x) es))
+              ,(desugar-pats `(ref ,slice-x) es fail-e body qd))
             ,fail-e))]
 
       ;; List patterns
       [`((ref |[]|) ,es ...)
         `(if ((ref is_slice) (ref none) ,x) ;; TODO: possibly allow [] patterns to match any iterable
-             ,(slice-pat x es)
+             ,(desugar-pats x es fail-e body qd)
              ,fail-e)]
 
       ;; ? patterns
@@ -286,8 +287,8 @@
 
        (desugar-pat x `(ref ,pat) fail-e eval-pred qd)]
 
-      [`(,es ...) #:when (> qd 0)
-       (slice-pat x es)]
+      [`(,es ...) #:when (> qd 0) ;; TODO: is this case ever used?
+       (desugar-pats x es fail-e body qd)]
 
       [_ 
         (displayln (format "desugar-pat failed for pattern: ~a" pat))
@@ -335,6 +336,7 @@
               (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
             (define rest-name (gensymb 'rest))
             (if (< idx 6)
+                ;; Gather the arguments into a slice (`rest-name`) for the remaining patterns to match on
                 (let* ([remaining (- 6 idx)]
                        [gather-vars (for/list ([i (in-range remaining)]) (gensymb 'gather))]
                        [gather-refs (map (lambda (v) `(ref ,v)) gather-vars)]
@@ -343,11 +345,13 @@
                   (values `(,@gather-refs (ref ,slice-var))
                           (lambda (b fail-ast)
                             `(let (ref ,rest-name) 
-                               ((ref _gather) (ref none) ,@gather-refs ,@pad-noargs (ref ,slice-var))
-                               ,(desugar-pat `(ref ,rest-name) `((ref |[]|) ((ref ,ell) ,inner-pat)) fail-ast b)))))
+                                  ((ref _gather) (ref none) ,@gather-refs ,@pad-noargs (ref ,slice-var))
+                               ,(desugar-pats `(ref ,rest-name) ps fail-ast b))))) ;; Desugar the remaining patterns (for now just the tail-position ... pattern)
+                
+                ;; The rest of the arguments are already gathered into `overflow-x`
                 (values '()
                         (lambda (b fail-ast)
-                          (desugar-pat overflow-x `((ref |[]|) ((ref ,ell) ,inner-pat)) fail-ast b))))]
+                          (desugar-pats `(ref ,rest-name) ps fail-ast b))))] ;; Desugar the remaining patterns
            
            ;; other cases
            [(cons pat rest-ps)
