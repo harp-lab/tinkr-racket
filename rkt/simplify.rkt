@@ -395,8 +395,8 @@
       [`(let (ref ,x) (if ,g ,t ,e) ,body)
        (define x+ (gensymb x)) ;; lower in-place with x+ as mut join var
        `(,@(lower-stmt `(if ,g ,t ,e) x+)
-	 ((ref =) (ref ,x) ((ref freeze) (ref ,x+)))
-	 ,@(recur body))]
+        ((ref =) (ref ,x) ((ref freeze) (ref ,x+)))
+        ,@(recur body))]
       [`(if ,g ,t ,e)
        (define g+ (gensymb 'grd))
        `(((ref =) (ref ,g+) ((ref eq) ,g (ref _false)))
@@ -417,15 +417,16 @@
       [`(return ,ae)
        (define kfun (gensymb 'kfun)) ;; nonlocal stack cont
        `(((ref =) (ref ,kfun) ((ref stack_pop)))
-	 (return ((ref ,kfun) (const 0) ,ae)))]
+	        (return ((ref ,kfun) (const 0) ,ae)))] ;; Q: why calling with (const 0) instead of (ref none)?
       
       ;; Emit a method call based on the _pos and _link variables
       [`((ref ,fx)) (error "Not yet supported: thunk call, no args")]
       [`((ref ,fx) ,arg0 ,args ...)
        `((return ((ref ,fx) ,arg0 ,@args)))]
       
-      [_ (pretty-print ast)
-	 (error "lower-ast: Unknown AST")]))
+      [_
+       (pretty-print ast)
+	     (error "lower-ast: Unknown AST")]))
   
   (define (def->blessed ast)
     (match ast

@@ -1,0 +1,22 @@
+
+;; Failing:
+;;  (dispatch on) empty strings
+;;  equality
+
+def (main)
+{
+  let a "hello"
+  let b "world"
+  let c ""
+  {
+    (debug_print a)
+    (debug_print (write b))
+    (debug_print (write c))
+    (debug_print (write (size a)))
+    (debug_print (write {a + " " + b + "!"}))
+    (debug_print (write (+ "" "" a "")))
+    (debug_print (write (= a b)))
+    (debug_print (write (= a "hello")))
+    (debug_print (write (= "hello" "hello")))
+  }
+}

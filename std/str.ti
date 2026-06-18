@@ -31,6 +31,8 @@ def (debug_print `[str ,len_hash ,cstr])
     none
 
 
+def (write s=`[str ,len_hash ,cstr])
+  s
 
 
 
@@ -116,7 +118,7 @@ blessed (cstr_concat2 a an b bn)
    return s
 }
 
-blessed (cstr_concat3 a an b bn c cn)
+blessed (cstr_concat3 a an b bn c cn) ;; TODO: unused?
 {
    anbn = (u64plus an bn)
    anbncn = (u64plus anbn cn)
