@@ -413,10 +413,21 @@
        ;; The binder lambda contains the built up output code to run the pattern matching.
        (define (process-params ps)
          (match ps
-           ['() ; done with params
-            (values (list)
-                    (lambda (b fail-ast sig-params)
-                      b))]
+           ;; done with params
+           ['()
+            ;; pad check to ensure that the caller did not pass too many arguments
+            (define pc (gensymb 'pad_check))
+
+            (cond
+              ;; Special case: don't add the pad check for _gather
+              [(eq? fname '_gather)
+                (values (list)
+                        (lambda (b fail-ast sig-params)
+                          b))]
+              [else
+                (values (list `(ref ,pc))
+                        (lambda (b fail-ast sig-params)
+                          `(if (bless ((ref equal) (ref _noarg) (ref ,pc))) ,b ,fail-ast)))])]
            
            ;; ellipsis case
            [(cons `((ref ,ell) ,inner-pat) rest-ps) #:when (eq? ell '|...|)
@@ -438,7 +449,10 @@
             (let-values ([(rest-px binder) (process-params rest-ps)])
               (values (cons px rest-px)
                       (lambda (b fail-ast sig-params)
-                        (desugar-pat px pat fail-ast sig-params (binder b fail-ast)))))]))
+                        (define body (desugar-pat px pat fail-ast sig-params (binder b fail-ast)))
+                        (if (eq? fname '_gather)
+                            body
+                            `(if (bless ((ref equal) (ref _noarg) ,px)) ,fail-ast ,body)))))]))
        
        ;; sig-params are the param names that will be matched on
        (define-values (sig-params body-binder) (process-params params))

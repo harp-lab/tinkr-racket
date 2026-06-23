@@ -202,72 +202,97 @@
   (define (process-params ps idx overflow-x)
     (match ps
       ['()
-        (cond
-          [(< idx 6)
-            (let ([pc (gensymb 'pad_check)])
-              (values (list `(ref ,pc))
-                      (lambda (b fail-ast) ;; check that the next param doesn't exist
-                        `(if (bless ((ref equal) (ref ,noarg-x) (ref ,pc))) ,b ,fail-ast))))]
-          [(= idx 6)
-            (let ([pc (gensymb 'pad_check)])
-              (values (list `(ref ,pc))
-                      (lambda (b fail-ast) ;; check that the current param is empty (most cases) or doesn't exist (_gather case)
-                        `(if (bless ((ref equal) (ref ,noarg-x) (ref ,pc)))
-                            ,b
-                            (if (bless ((ref equal) (ref _empty) (ref ,pc))) ,b ,fail-ast)))))]
-          [else
-            (values '()
-                    (lambda (b fail-ast) ;; check that the rest of the overflow is empty
-                      (if overflow-x
-                          `(if (bless ((ref equal) (ref _empty) ,overflow-x)) ,b ,fail-ast)
-                          b)))])]
+        (values (list)
+                (lambda (b)
+                  b))]
       [(cons px rest-ps)
         (cond
           [(or (< idx 6)
                (eq? fname '_gather))
             (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
               (values (cons px rest-px)
-                      (lambda (b fail-ast)
-                        (define body (binder b fail-ast))
-                        (if (eq? fname '_gather)
-                            body
-                            `(if (bless ((ref equal) (ref ,noarg-x) ,px)) ,fail-ast ,body)))))]
+                      (lambda (b)
+                        (binder b))))]
 
           ;; This param will be the overflow list
           [(= idx 6)
             (let* ([slice-x (gensymb 'overflow)]
                    [slice-ref `(ref ,slice-x)]
                    [next-slice-x (gensymb 'overflow_rest)])
-              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
+              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) next-slice-x)])
                 (values (cons slice-ref rest-px)
-                        (lambda (b fail-ast)
-                          `(if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
-                                ,fail-ast
-                                (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
-                                    ,fail-ast
-                                    (let ,px ((ref _first) (ref _none) ,slice-ref) ;; Bind the arg to the param name
-                                      (let (ref ,next-slice-x) ((ref _rest) (ref _none) ,slice-ref) ;; Continue with the rest of the overflow list
-                                        ,(binder b fail-ast)))))))))]
+                        (lambda (b)
+                          `(let ,px
+                                (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
+                                    (ref ,noarg-x)
+                                    (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
+                                        (ref ,noarg-x)
+                                        ((ref _first) (ref _none) ,slice-ref)))
+                              (let (ref ,next-slice-x)
+                                   (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
+                                       (ref _empty)
+                                       (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
+                                           (ref _empty)
+                                           ((ref _rest) (ref _none) ,slice-ref)))
+                                ,(binder b)))))))]
 
           ;; Rest of the params to put into the overflow list
           [else
-            (let* ([next-slice-x (gensymb 'overflow_rest)])
-              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
+            (let ([next-slice-x (gensymb 'overflow_rest)])
+              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) next-slice-x)])
                 (values rest-px 
-                        (lambda (b fail-ast)
-                          `(if (bless ((ref equal) (ref _empty) ,overflow-x)) ;; Check not empty
-                                ,fail-ast
-                                (let ,px ((ref _first) (ref _none) ,overflow-x) ;; Bind
-                                  (let (ref ,next-slice-x) ((ref _rest) (ref _none) ,overflow-x) ;; Continue with the rest
-                                    ,(binder b fail-ast))))))))])]))
+                        (lambda (b)
+                          `(let ,px
+                                (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
+                                    (ref ,noarg-x)
+                                    ((ref _first) (ref _none) (ref ,overflow-x)))
+                              (let (ref ,next-slice-x)
+                                   (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
+                                       (ref _empty)
+                                       ((ref _rest) (ref _none) (ref ,overflow-x)))
+                                ,(binder b)))))))])]))
 
-  (define-values (sig-params body-binder) (process-params params 0 #f))
+  (define (translate-call-sites ast)
+    (match ast
+      [`(ref ,x) ast]
+      [`(const ,v) ast]
+      [`(bless ,e0) ast]
 
-  ;; What to do when we fail (e.g. wrong arity)
-  (define fail-e `((ref failx) (ref ,fallback-x) ,@sig-params))
+      [`(,(and ctor (or 'object 'subword '|[]|)) ,eas ...)
+        `(,ctor ,@(map translate-call-sites eas))]
 
-  `(def ((ref ,fname) (ref ,fallback-x) ,@sig-params)
-    ,(body-binder body fail-e)))
+      [`(let ,x ,e0 ,e1)
+       `(let ,x ,(translate-call-sites e0) ,(translate-call-sites e1))]
+
+      [`(if ,e0 ,e1 ,e2)
+       `(if ,(translate-call-sites e0) ,(translate-call-sites e1) ,(translate-call-sites e2))]
+
+      [`(continue-dispatch ,eas ...)
+       `(continue-dispatch ,@(map translate-call-sites eas))]
+
+      [`(,ef ,eas ...)
+       (define eas+ (map translate-call-sites eas))
+       (define ef+ (translate-call-sites ef))
+
+       (cond
+        [(equal? ef+ '(ref raw_apply))
+          `(,ef+ ,@eas+)]
+        [(< (length eas+) (- bless-arg-count 1))
+          `(,ef+ ,@eas+)]
+        [else ;; Overflow: gather tail into a slice
+              (define head (take eas+ (- bless-arg-count 1)))
+              (define tail (drop eas+ (- bless-arg-count 1)))
+              (define residual-slice `(|[]| ,@tail))
+              `(,ef+ ,@head ,residual-slice)])]
+
+      [_
+        (displayln ast)
+        (error 'translate-call-sites-error)]))
+
+  (define-values (new-sig-params body-binder) (process-params params 0 #f))
+
+  `(def ((ref ,fname) (ref ,fallback-x) ,@new-sig-params)
+    ,(body-binder (translate-call-sites body))))
 
 
 (define (cps-convert ast)
