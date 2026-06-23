@@ -5,8 +5,8 @@
 
 (provide (contract-out
           [alphatize (-> sm-core-ir? sm-core-ir?)]
-	  [anf-convert (-> sm-core-ir? sm-core-ir?)]
-	  [simplify-module (-> any/c any/c)]))
+          [anf-convert (-> sm-core-ir? sm-core-ir?)]
+          [simplify-module (-> any/c any/c)]))
 
 
 (define global-names 0) ;; (set)
@@ -131,15 +131,14 @@
                           `(let (ref ,t) (,ctor ,@xs)
 				,(k `(ref ,t)))))]
 
-
       [`(let ,x ,e0 ,e1)
        (match e0 ;; When the cont is small enough, duplicate it freely
-	 [`(if ,g ,t ,e) #:when (small-expr? e1)
-	  (normalize `(if ,g (let ,x ,t ,e1) (let ,x ,e, e1)) k)]
-	 [_ (normalize e0
-		       (λ (e0+)
-			 `(let ,x ,e0+
-			       ,(normalize e1 k))))])]
+        [`(if ,g ,t ,e) #:when (small-expr? e1)
+          (normalize `(if ,g (let ,x ,t ,e1) (let ,x ,e, e1)) k)]
+        [_ (normalize e0
+                  (λ (e0+)
+                    `(let ,x ,e0+
+                          ,(normalize e1 k))))])]
 
       [`(if ,e0 ,e1 ,e2)
        (normalize-name e0
@@ -191,6 +190,86 @@
     [_ (error 'anf-convert-err)]))
 
 
+;; Expr -> Expr
+(define (limit-def-params ast)
+  (displayln "limiting def params...")
+  (displayln ast)
+
+  (define noarg-x '_u__noarg)
+  
+  (match-define `(def ((ref ,fname) (ref ,fallback-x) ,params ...) ,body) ast)
+
+  (define (process-params ps idx overflow-x)
+    (match ps
+      ['()
+        (cond
+          [(< idx 6)
+            (let ([pc (gensymb 'pad_check)])
+              (values (list `(ref ,pc))
+                      (lambda (b fail-ast) ;; check that the next param doesn't exist
+                        `(if (bless ((ref equal) (ref ,noarg-x) (ref ,pc))) ,b ,fail-ast))))]
+          [(= idx 6)
+            (let ([pc (gensymb 'pad_check)])
+              (values (list `(ref ,pc))
+                      (lambda (b fail-ast) ;; check that the current param is empty (most cases) or doesn't exist (_gather case)
+                        `(if (bless ((ref equal) (ref ,noarg-x) (ref ,pc)))
+                            ,b
+                            (if (bless ((ref equal) (ref _empty) (ref ,pc))) ,b ,fail-ast)))))]
+          [else
+            (values '()
+                    (lambda (b fail-ast) ;; check that the rest of the overflow is empty
+                      (if overflow-x
+                          `(if (bless ((ref equal) (ref _empty) ,overflow-x)) ,b ,fail-ast)
+                          b)))])]
+      [(cons px rest-ps)
+        (cond
+          [(or (< idx 6)
+               (eq? fname '_gather))
+            (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
+              (values (cons px rest-px)
+                      (lambda (b fail-ast)
+                        (define body (binder b fail-ast))
+                        (if (eq? fname '_gather)
+                            body
+                            `(if (bless ((ref equal) (ref ,noarg-x) ,px)) ,fail-ast ,body)))))]
+
+          ;; This param will be the overflow list
+          [(= idx 6)
+            (let* ([slice-x (gensymb 'overflow)]
+                   [slice-ref `(ref ,slice-x)]
+                   [next-slice-x (gensymb 'overflow_rest)])
+              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
+                (values (cons slice-ref rest-px)
+                        (lambda (b fail-ast)
+                          `(if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
+                                ,fail-ast
+                                (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
+                                    ,fail-ast
+                                    (let ,px ((ref _first) (ref _none) ,slice-ref) ;; Bind the arg to the param name
+                                      (let (ref ,next-slice-x) ((ref _rest) (ref _none) ,slice-ref) ;; Continue with the rest of the overflow list
+                                        ,(binder b fail-ast)))))))))]
+
+          ;; Rest of the params to put into the overflow list
+          [else
+            (let* ([next-slice-x (gensymb 'overflow_rest)])
+              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) `(ref ,next-slice-x))])
+                (values rest-px 
+                        (lambda (b fail-ast)
+                          `(if (bless ((ref equal) (ref _empty) ,overflow-x)) ;; Check not empty
+                                ,fail-ast
+                                (let ,px ((ref _first) (ref _none) ,overflow-x) ;; Bind
+                                  (let (ref ,next-slice-x) ((ref _rest) (ref _none) ,overflow-x) ;; Continue with the rest
+                                    ,(binder b fail-ast))))))))])]))
+
+  (define-values (sig-params body-binder) (process-params params 0 #f))
+
+  ;; What to do when we fail (e.g. wrong arity)
+  (define fail-e `((ref failx) (ref ,fallback-x) ,@sig-params))
+
+  `(def ((ref ,fname) (ref ,fallback-x) ,@sig-params)
+    ,(body-binder body fail-e)))
+
+
 (define (cps-convert ast)
   ;; Blessed compilation below adds stack push/pop
   ;;   this code compiles to use these to push
@@ -213,21 +292,23 @@
 
     (define (free ast)
       (define (freevars ast)
-	(define (freebless ast)
-	  (match ast
-	    [`(ref ,x) (set x)]
-	    [`(,fe ,aes ...) ;; do not count fun-expr
-	     (foldl set-union (set) (map freevars aes))]
-	    [_ (set)]))
-	(match ast
-	  [`(ref ,x) (set x)]
-	  [`(bless ,e0) (freebless e0)]
-	  [`(let ,lhs ,rhs ,body)
-	   (set-union (freevars rhs)
-		      (set-subtract (freevars body) (freevars lhs)))]
-	  [`(,es ...)
-	   (foldl set-union (set) (map freevars es))]
-	  [_ (set)]))
+        (define (freebless ast)
+          (match ast
+            [`(ref ,x) (set x)]
+            [`(,fe ,aes ...) ;; do not count fun-expr
+              (foldl set-union (set) (map freevars aes))]
+            [_ (set)]))
+        
+        (match ast
+          [`(ref ,x) (set x)]
+          [`(bless ,e0) (freebless e0)]
+          [`(let ,lhs ,rhs ,body)
+            (set-union (freevars rhs)
+                  (set-subtract (freevars body) (freevars lhs)))]
+          [`(,es ...)
+            (foldl set-union (set) (map freevars es))]
+          [_ (set)]))
+      
       (set-subtract (freevars ast) global-names reserved-bl-x
 		    (set 'unbox_subword 'get_subword_tag)))
 
@@ -237,19 +318,21 @@
       (define kname (gensymb (sym-append defname type)))
       (lift-def! ;; assumes def interface w/ dummy fallback
        `(def ((ref ,kname) (ref ,(gensymb '_)) (ref ,x))
-	     ,(foldl (lambda (free-x body+)
+	     ,(foldl
+         (lambda (free-x body+)
 		       `(let (ref ,free-x) (bless ((ref stack_pop)))
 			     ,body+))
 		     (recur body)
 		     freelst)))
-      (foldr (lambda (free-x body+)
+      (foldr
+        (lambda (free-x body+)
 	       `(let (ref ,(gensymb '_))
-		  (bless ((ref stack_push) (ref ,free-x)))
-                  ,body+))
-             `(let (ref ,(gensymb '_))
-		(bless ((ref stack_push) ((ref blessed_t) (ref ,kname))))
-		,rhs)
-             freelst))
+               (bless ((ref stack_push) (ref ,free-x)))
+               ,body+))
+        `(let (ref ,(gensymb '_))
+              (bless ((ref stack_push) ((ref blessed_t) (ref ,kname))))
+              ,rhs)
+        freelst))
     
     (match ast
       [(or `(ref ,_) `(const ,_)) `(return ,ast)]
@@ -445,7 +528,10 @@
      (define defs+	 ;; Simplify core code: Alpha -> ANF -> CPS 
        (foldr append '() ;; flatten (CPS may emit >1 def for each def)
 	      (for/list ([ast defs]) 
-          (cps-convert (anf-convert (alphatize ast))))))
+          (define temp (anf-convert (limit-def-params (alphatize ast))))
+          (displayln "AFTER limit: ")
+          (displayln temp)
+          (cps-convert temp))))
 
      ;; Use helpers just above to lower these defs to blessed code
      `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs+) blessed)

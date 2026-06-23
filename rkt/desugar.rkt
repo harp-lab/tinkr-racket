@@ -423,9 +423,9 @@
             (unless (null? rest-ps)
               (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
             (define rest-name (gensymb 'rest))
-            (values (list `(ref ,rest-name))
+            (values (list `(ref ,rest-name)) ;; TODO: add indicator that this is a ... pattern and that rest-name should be a (gathered) slice
                     (lambda (b fail-ast sig-params)
-                      (desugar-pats `(ref ,rest-name) ps sig-params fail-ast b)))]
+                      (desugar-pats `(ref ,rest-name) ps fail-ast sig-params b)))]
            
            ;; other cases
            [(cons pat rest-ps)
@@ -440,16 +440,8 @@
                       (lambda (b fail-ast sig-params)
                         (desugar-pat px pat fail-ast sig-params (binder b fail-ast)))))]))
        
-       (define-values (params-x body-binder) (process-params params))
-
-       ;; These are the param names that will be matched on (TODO: move the code for the padding params to a later pass)
-       (define sig-params
-         (let loop ([pxs params-x] [sofar 1])
-           (if (>= sofar bless-arg-count)
-               '() ;; TODO: is this correct correct? should be an error?
-               (if (null? pxs)
-                   (cons `(ref ,(gensymb '_)) (loop '() (add1 sofar)))
-                   (cons (car pxs) (loop (cdr pxs) (add1 sofar)))))))
+       ;; sig-params are the param names that will be matched on
+       (define-values (sig-params body-binder) (process-params params))
        
        ;; What to do if the patterns don't match: go to the next def (i.e. failx)
        (define fail-e `((ref ,failx) (ref ,fallback-x) ,@sig-params))
