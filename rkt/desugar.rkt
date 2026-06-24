@@ -434,7 +434,7 @@
             (unless (null? rest-ps)
               (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
             (define rest-name (gensymb 'rest))
-            (values (list `(ref ,rest-name)) ;; TODO: add indicator that this is a ... pattern and that rest-name should be a (gathered) slice
+            (values (list `((ref ,ell) (ref ,rest-name))) ; Keep ... for use in later passes and for fail-e
                     (lambda (b fail-ast sig-params)
                       (desugar-pats `(ref ,rest-name) ps fail-ast sig-params b)))]
            
@@ -450,17 +450,35 @@
               (values (cons px rest-px)
                       (lambda (b fail-ast sig-params)
                         (define body (desugar-pat px pat fail-ast sig-params (binder b fail-ast)))
-                        (if (eq? fname '_gather)
+                        (if (eq? fname '_gather) ;; Special case: _gather allows passing _noarg
                             body
                             `(if (bless ((ref equal) (ref _noarg) ,px)) ,fail-ast ,body)))))]))
        
        ;; sig-params are the param names that will be matched on
        (define-values (sig-params body-binder) (process-params params))
        
+       (define (is-splice? e)
+         (match e
+          [`((ref ,ell) ,_) #:when (eq? ell '|...|)
+           #t]
+          [_ #f]))
+       
        ;; What to do if the patterns don't match: go to the next def (i.e. failx)
-       (define fail-e `((ref ,failx) (ref ,fallback-x) ,@sig-params))
+       (define fail-e
+        (cond
+          ;; If a sig param is variadic, then splice it into the call to failx:
+          [(ormap is-splice? sig-params)
+            (define arg-list (desugar-ast `(|[]| ,@sig-params)))
+            `((ref _apply_with_fallback) (ref none) (ref ,failx) (ref ,fallback-x) ,arg-list)]
 
-       `(def ((ref ,name) (ref ,fallback-x) ,@sig-params)
+          ;; Normal failx call:
+          [else
+            `((ref ,failx) (ref ,fallback-x) ,@sig-params)]))
+
+       ;; Call desugar-ast on each param in the case there is a (ref ...) that needs the ref removed
+       (define desguared-sig-params (map desugar-ast sig-params))
+
+       `(def ((ref ,name) (ref ,fallback-x) ,@desguared-sig-params)
           ,(body-binder 
             `(if ,(desugar-ast `((ref |&|) ,@maybe-when)) ; if the when exists: evaluate it otherwise the & is empty so just continue normally
                  ,(desugar-ast body) ; if the when suceedes (or there is no when guard)
@@ -604,7 +622,7 @@
        (define (is-splice? e)
          (match e [`(|...| ,_) #t] [_ #f]))
        (cond
-        [(equal? ef+ '(ref raw_apply))
+        [(or (equal? ef+ '(ref raw_apply)) (equal? ef+ '(ref raw_apply_with_fallback))) ; Special cases that don't require a fallback arg
           `(,ef+ ,@es+)]
         [(ormap is-splice? es+)
           (define arg-list (desugar-ast `(|[]| ,@es) qd))

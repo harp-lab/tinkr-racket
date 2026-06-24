@@ -1,0 +1,35 @@
+
+def (fun_i a b c ...)
+  c
+
+def (fun_j a (? b int) c ...)
+  c
+def (fun_j a ...)
+{
+  (debug_print "fun_j failed")
+  a
+}
+
+def (main)
+{
+  (debug_print "fun_i")
+  (debug_print (write (fun_i 5 6)))
+  (debug_print (write (fun_i 5 6 7)))
+  (debug_print (write (fun_i 5 6 7 8 9 10 11 12)))
+
+  (debug_print "fun_j")
+  (debug_print (write (fun_j 5 6)))
+  (debug_print (write (fun_j 5 6 7)))
+  (debug_print (write (fun_j 5 6 7 8 9 10 11 12)))
+
+  ;; The rest of these should all fail (and thus call _apply_with_fallback):
+  (debug_print (write (fun_j 5 "string")))
+  (debug_print (write (fun_j 5 "string" 7)))
+  (debug_print (write (fun_j 5 "string" 7 8)))
+  (debug_print (write (fun_j 5 "string" 7 8 9)))
+
+  ;; These should force raw_apply_with_fallback to use r4
+  (debug_print (write (fun_j 5 "string" 7 8 9 10)))
+  (debug_print (write (fun_j 5 "string" 7 8 9 10 11)))
+  (debug_print (write (fun_j 5 "string" 7 8 9 10 11 12)))
+}

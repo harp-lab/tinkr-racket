@@ -105,6 +105,147 @@
        (error 'alphatize)]))
 
 
+
+
+;; Expr -> Expr
+;; A pass that limits the number of arguments a function takes.
+(define (limit-def-params ast)
+  (define noarg-x '_u__noarg)
+  (define standard-arg-count (- bless-arg-count 2)) ;; Number of blessed args not including the overflow slice or fallback
+  
+  (match-define `(def ((ref ,fname) (ref ,fallback-x) ,params ...) ,body) ast)
+
+  ;; (ListOf Expr) Int (or Symbol #f) -> (ValuesOf (ListOf Symbol) Lambda)
+  ;; Processes def param list to cap the number of params.
+  ;; `ps` is the parameter list. `idx` is the current parameter index.
+  ;; `overflow-x` is the name of the overflow splice (once it is needed).
+  (define (process-params ps idx overflow-x)
+    (match ps
+      ['()
+        (values (list)
+                (lambda (b) b))]
+      
+      ;; ellipsis case
+      [(cons `(,ell ,px) rest-ps) #:when (eq? ell '|...|)
+        (unless (null? rest-ps)
+          (error 'limit-def-params "Vararg splice (...) must be the final parameter in a definition."))
+        (cond
+          ;; Slice needs to be gathered
+          [(< idx standard-arg-count)
+            (let* ([remaining (- standard-arg-count idx)] ; the remaining args before things should be put into the overflow slice
+                   [gather-vars (for/list ([i (in-range remaining)]) (gensymb 'gather))]
+                   [gather-refs (map (lambda (v) `(ref ,v)) gather-vars)]
+                   [slice-var (gensymb 'gather_slice)]
+                   [pad-noargs (for/list ([i (in-range (- standard-arg-count remaining))]) `(ref ,noarg-x))])
+              (values `(,@gather-refs (ref ,slice-var))
+                      (lambda (b)
+                        `(let ,px 
+                              ((ref _u__gather) (ref _none) ,@gather-refs ,@pad-noargs (|[]| (ref ,slice-var))) ; gathers the gather-refs and slice-var into a single slice
+                            ,b))))]
+          
+          ;; Everything is in the overflow slice, so just bind it to the correct name: px
+          [else
+            (values '()
+                    (lambda (b)
+                      `(let ,px (ref ,overflow-x)
+                          ,b)))])]
+
+      [(cons px rest-ps)
+        (cond
+          [(< idx standard-arg-count)
+            (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
+              (values (cons px rest-px)
+                      (lambda (b)
+                        (binder b))))]
+
+          ;; This param will be the overflow list
+          [(= idx standard-arg-count)
+            (let* ([slice-x (gensymb 'overflow)]
+                   [slice-ref `(ref ,slice-x)]
+                   [next-slice-x (gensymb 'overflow_rest)])
+              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) next-slice-x)])
+                (values (cons slice-ref rest-px)
+                        (lambda (b)
+                          `(let ,px
+                                (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
+                                    (ref ,noarg-x)
+                                    (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
+                                        (ref ,noarg-x)
+                                        ((ref _first) (ref _none) ,slice-ref)))
+                              (let (ref ,next-slice-x)
+                                   (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
+                                       (ref _empty)
+                                       (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
+                                           (ref _empty)
+                                           ((ref _rest) (ref _none) ,slice-ref)))
+                                ,(binder b)))))))]
+
+          ;; Rest of the params to put into the overflow list
+          [else
+            (let ([next-slice-x (gensymb 'overflow_rest)])
+              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) next-slice-x)])
+                (values rest-px 
+                        (lambda (b)
+                          `(let ,px
+                                (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
+                                    (ref ,noarg-x)
+                                    ((ref _first) (ref _none) (ref ,overflow-x)))
+                              (let (ref ,next-slice-x)
+                                   (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
+                                       (ref _empty)
+                                       ((ref _rest) (ref _none) (ref ,overflow-x)))
+                                ,(binder b)))))))])]))
+
+  ;; Expr -> Expr
+  ;; Translate call sites to only take a fixed number of arguments
+  (define (translate-call-sites ast)
+    (match ast
+      [`(ref ,x) ast]
+      [`(const ,v) ast]
+      [`(bless ,e0) ast]
+
+      [`(,ell ,e) #:when (eq? ell '|...|)
+       `(,ell ,(translate-call-sites e))]
+
+      [`(,(and ctor (or 'object 'subword '|[]|)) ,eas ...)
+        `(,ctor ,@(map translate-call-sites eas))]
+
+      [`(let ,x ,e0 ,e1)
+       `(let ,x ,(translate-call-sites e0) ,(translate-call-sites e1))]
+
+      [`(if ,e0 ,e1 ,e2)
+       `(if ,(translate-call-sites e0) ,(translate-call-sites e1) ,(translate-call-sites e2))]
+
+      [`(continue-dispatch ,eas ...)
+       `(continue-dispatch ,@(map translate-call-sites eas))]
+
+      [`(,ef ,eas ...)
+       (define eas+ (map translate-call-sites eas))
+       (define ef+ (translate-call-sites ef))
+
+       (cond
+        [(or (equal? ef+ '(ref _raw__apply)) (equal? ef+ '(ref _raw__apply__with__fallback))) ; Special cases that don't gather the tail into a slice
+          `(,ef+ ,@eas+)]
+        [(< (length eas+) (- bless-arg-count 1))
+          `(,ef+ ,@eas+)]
+        [else ;; Overflow: gather tail into a slice
+              (define head (take eas+ (- bless-arg-count 1)))
+              (define tail (drop eas+ (- bless-arg-count 1)))
+              (define residual-slice `(|[]| ,@tail))
+              `(,ef+ ,@head ,residual-slice)])]
+
+      [_
+        (displayln ast)
+        (error 'translate-call-sites-error)]))
+
+  (define-values (new-sig-params body-binder) (process-params params 0 #f))
+
+  `(def ((ref ,fname) (ref ,fallback-x) ,@new-sig-params)
+    ,(body-binder (translate-call-sites body))))
+
+
+
+
 ;; Normalizes sub-expressions so they are let bound
 ;; Normalizes some simple forms into blessed code and junctures with blessed code
 (define (anf-convert ast)
@@ -190,109 +331,6 @@
     [_ (error 'anf-convert-err)]))
 
 
-;; Expr -> Expr
-(define (limit-def-params ast)
-  (displayln "limiting def params...")
-  (displayln ast)
-
-  (define noarg-x '_u__noarg)
-  
-  (match-define `(def ((ref ,fname) (ref ,fallback-x) ,params ...) ,body) ast)
-
-  (define (process-params ps idx overflow-x)
-    (match ps
-      ['()
-        (values (list)
-                (lambda (b)
-                  b))]
-      [(cons px rest-ps)
-        (cond
-          [(or (< idx 6)
-               (eq? fname '_gather))
-            (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) #f)])
-              (values (cons px rest-px)
-                      (lambda (b)
-                        (binder b))))]
-
-          ;; This param will be the overflow list
-          [(= idx 6)
-            (let* ([slice-x (gensymb 'overflow)]
-                   [slice-ref `(ref ,slice-x)]
-                   [next-slice-x (gensymb 'overflow_rest)])
-              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) next-slice-x)])
-                (values (cons slice-ref rest-px)
-                        (lambda (b)
-                          `(let ,px
-                                (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
-                                    (ref ,noarg-x)
-                                    (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
-                                        (ref ,noarg-x)
-                                        ((ref _first) (ref _none) ,slice-ref)))
-                              (let (ref ,next-slice-x)
-                                   (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
-                                       (ref _empty)
-                                       (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
-                                           (ref _empty)
-                                           ((ref _rest) (ref _none) ,slice-ref)))
-                                ,(binder b)))))))]
-
-          ;; Rest of the params to put into the overflow list
-          [else
-            (let ([next-slice-x (gensymb 'overflow_rest)])
-              (let-values ([(rest-px binder) (process-params rest-ps (+ idx 1) next-slice-x)])
-                (values rest-px 
-                        (lambda (b)
-                          `(let ,px
-                                (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
-                                    (ref ,noarg-x)
-                                    ((ref _first) (ref _none) (ref ,overflow-x)))
-                              (let (ref ,next-slice-x)
-                                   (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
-                                       (ref _empty)
-                                       ((ref _rest) (ref _none) (ref ,overflow-x)))
-                                ,(binder b)))))))])]))
-
-  (define (translate-call-sites ast)
-    (match ast
-      [`(ref ,x) ast]
-      [`(const ,v) ast]
-      [`(bless ,e0) ast]
-
-      [`(,(and ctor (or 'object 'subword '|[]|)) ,eas ...)
-        `(,ctor ,@(map translate-call-sites eas))]
-
-      [`(let ,x ,e0 ,e1)
-       `(let ,x ,(translate-call-sites e0) ,(translate-call-sites e1))]
-
-      [`(if ,e0 ,e1 ,e2)
-       `(if ,(translate-call-sites e0) ,(translate-call-sites e1) ,(translate-call-sites e2))]
-
-      [`(continue-dispatch ,eas ...)
-       `(continue-dispatch ,@(map translate-call-sites eas))]
-
-      [`(,ef ,eas ...)
-       (define eas+ (map translate-call-sites eas))
-       (define ef+ (translate-call-sites ef))
-
-       (cond
-        [(equal? ef+ '(ref raw_apply))
-          `(,ef+ ,@eas+)]
-        [(< (length eas+) (- bless-arg-count 1))
-          `(,ef+ ,@eas+)]
-        [else ;; Overflow: gather tail into a slice
-              (define head (take eas+ (- bless-arg-count 1)))
-              (define tail (drop eas+ (- bless-arg-count 1)))
-              (define residual-slice `(|[]| ,@tail))
-              `(,ef+ ,@head ,residual-slice)])]
-
-      [_
-        (displayln ast)
-        (error 'translate-call-sites-error)]))
-
-  (define-values (new-sig-params body-binder) (process-params params 0 #f))
-
-  `(def ((ref ,fname) (ref ,fallback-x) ,@new-sig-params)
-    ,(body-binder (translate-call-sites body))))
 
 
 (define (cps-convert ast)
@@ -553,10 +591,7 @@
      (define defs+	 ;; Simplify core code: Alpha -> ANF -> CPS 
        (foldr append '() ;; flatten (CPS may emit >1 def for each def)
 	      (for/list ([ast defs]) 
-          (define temp (anf-convert (limit-def-params (alphatize ast))))
-          (displayln "AFTER limit: ")
-          (displayln temp)
-          (cps-convert temp))))
+          (cps-convert (anf-convert (limit-def-params (alphatize ast)))))))
 
      ;; Use helpers just above to lower these defs to blessed code
      `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs+) blessed)
