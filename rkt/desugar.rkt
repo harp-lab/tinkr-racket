@@ -204,13 +204,13 @@
         (define pvs (set->list (gather-pattern-variables pat qd))) ; Pick an (arbitrary) order by converting to a list
         (define pv-refs (map (lambda (pv) `(ref ,pv)) pvs))
 
-        (define renaming
+        #|(define renaming
           (for/hash ([pv pvs])
             (values pv (gensymb pv))))
         (define renamed-pat (rename-pattern-variables pat renaming))
-        (define pvs^ (hash-values renaming))
+        (define pvs^ (hash-values renaming))|#
 
-        #|(define accs-x (gensymb 'accs))
+        (define accs-x (gensymb 'accs))
         (define elm-x (gensymb 'elm))
         (define pvs^ (map (lambda (pv) (gensymb pv)) pvs)) ; Names for the accumulators
 
@@ -230,15 +230,15 @@
         (define lambda-x (gensymb 'lambda_def))
         (define lam-def
           `(def ((ref ,lambda-x) (ref ,fallback-x) (ref ,elm-x) (ref ,accs-x))
-            ,(desugar-pat `(ref ,elm-x) pat `(ref false)
+            ,(desugar-pat `(ref ,elm-x) pat `(ref false) sig-params
                 (unpack-accs accs-x pvs^
                   `(|[]| ,@update-accs))
                 qd)))
 
-        (lift-def! lambda-x lam-def)|#
+        (lift-def! lambda-x lam-def)
 
         ;; Initial accs: [] [] ...
-        (define initial-accs
+        #|(define initial-accs
           (for/fold ([accs '()])
                     ([_ pvs])
             (cons '(|[]|) accs)))
@@ -265,9 +265,9 @@
 
         `(if ((ref is_slice) (ref none) ,x)
           ((ref ,loop-x) (ref ,fallback-x) ,@sig-params ,x ,@initial-accs)
-          ,fail-e)
+          ,fail-e)|#
 
-        #;`(if ((ref is_slice) (ref none) ,x)
+        `(if ((ref is_slice) (ref none) ,x)
           (let (ref ,accs-x) ((ref _foldl) (ref none) (ref ,lambda-x) ,initial-accs ,x)
               (if (ref ,accs-x)
                 ,(unpack-accs accs-x pvs body)
@@ -449,7 +449,7 @@
             (let-values ([(rest-px binder) (process-params rest-ps)])
               (values (cons px rest-px)
                       (lambda (b fail-ast sig-params)
-                        (define body (desugar-pat px pat fail-ast sig-params (binder b fail-ast)))
+                        (define body (desugar-pat px pat fail-ast sig-params (binder b fail-ast sig-params)))
                         (if (eq? fname '_gather) ;; Special case: _gather allows passing _noarg
                             body
                             `(if (bless ((ref equal) (ref _noarg) ,px)) ,fail-ast ,body)))))]))
