@@ -1,0 +1,29 @@
+
+def (write `[set])
+  "set"
+
+def (write `[point ,x ,y])
+  "`[point " + (write x) + " " + (write y) + "]"
+
+
+def (test1 (& xs `[set]) ...)
+  xs
+def (test1 xs ...)
+  false
+
+def (test2 (& xs `[point ,ys ,zs]) ...)
+  [xs ys zs]
+def (test2 xs ...)
+  false
+
+
+def (main)
+{
+  (debug_print "Test 1:")
+  (debug_print (write (test1))) ;; Does not produce expected result
+  (debug_print (write (test1 `[set])))
+
+  (debug_print "Test 2:")
+  (debug_print (write (test2)))
+  (debug_print (write (test2 `[point 1 2] `[point 3 4] `[point 5 6]))) ;; Wrong binding order
+}

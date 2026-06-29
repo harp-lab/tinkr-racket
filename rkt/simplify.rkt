@@ -105,7 +105,21 @@
        (error 'alphatize)]))
 
 
+(define (with-debug-print val-ast ast)
+  `(let (ref ,(gensymb '_))
+        ((ref _debug__print) (ref _none) ((ref _write) (ref _none) ,val-ast))
+        ,ast))
 
+(define (with-print-value val-ast ast)
+  `(let (ref ,(gensymb '_))
+        (bless ((ref print_debug_value) ,val-ast))
+        ,ast))
+
+(define (with-print-values val-asts ast)
+  (foldr (lambda (val-ast acc)
+            (with-print-value val-ast acc))
+         ast
+         val-asts))
 
 ;; Expr -> Expr
 ;; A pass that limits the number of arguments a function takes.
@@ -145,9 +159,13 @@
           
           ;; Everything is in the overflow slice, so just bind it to the correct name: px
           [else
-            (values '()
+            (define over-x (if overflow-x
+                               overflow-x
+                               (gensymb 'overflow)))
+            
+            (values (if overflow-x '() (list `(ref ,over-x)))
                     (lambda (b)
-                      `(let ,px (ref ,overflow-x)
+                      `(let ,px (ref ,over-x)
                           ,b)))])]
 
       [(cons px rest-ps)
@@ -550,6 +568,7 @@
       
       ;; Invoke fun-ptr at fallback ptr, then increment and pass fwd
       [`(continue-dispatch ,fallback ,args ...)
+       ;; There will be 7 args at this point with the last one being a slice
        (define fun (gensymb 'fallbackfun))
        (define fb1 (gensymb 'fallbk1_))
        (define rv (gensymb 'rv))

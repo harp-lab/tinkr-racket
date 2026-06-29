@@ -41,9 +41,13 @@
 
   ;; Expr Expr -> Expr
   ;; For debuging purposes.
-  (define (with-print-debug ast val-ast)
+  (define (with-print-debug-desguared val-ast ast)
     `((ref |;|) (ref none)
           ((ref debug_print) (ref none) ((ref write) (ref none) ,val-ast))
+          ,ast))
+  (define (with-print-debug val-ast ast)
+    `((ref |;|)
+          ((ref debug_print) ((ref write) ,val-ast))
           ,ast))
 
   ;; Expr -> (SetOf Symbol)
@@ -190,6 +194,7 @@
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`) which should be a slice
   ;; pats is a (ListOf Patterns)
   ;; body and fail-e must already be desugared
+  ;; sig-params must not be desugared yet
   (define (desugar-pats x pats fail-e sig-params body [qd 0])
     (match pats
       ['()
@@ -204,41 +209,16 @@
         (define pvs (set->list (gather-pattern-variables pat qd))) ; Pick an (arbitrary) order by converting to a list
         (define pv-refs (map (lambda (pv) `(ref ,pv)) pvs))
 
-        #|(define renaming
+        (define renaming
           (for/hash ([pv pvs])
             (values pv (gensymb pv))))
         (define renamed-pat (rename-pattern-variables pat renaming))
-        (define pvs^ (hash-values renaming))|#
+        (define pvs^ (hash-values renaming))
 
-        (define accs-x (gensymb 'accs))
-        (define elm-x (gensymb 'elm))
-        (define pvs^ (map (lambda (pv) (gensymb pv)) pvs)) ; Names for the accumulators
-
-        ;; Initial accs: [[] [] [] ...]
-        (define initial-accs
-          (cons '|[]|
-            (for/fold ([accs '()])
-                      ([_ pvs])
-              (cons '(|[]|) accs))))
-
-        ;; Code for updating the accs with newly bound vars in the subpattern `pat`
-        (define update-accs
-          (for/list ([pv pvs]
-                     [pv^ pvs^])
-            `((ref +) (ref none) (ref ,pv^) (|[]| (ref ,pv)))))
-        
-        (define lambda-x (gensymb 'lambda_def))
-        (define lam-def
-          `(def ((ref ,lambda-x) (ref ,fallback-x) (ref ,elm-x) (ref ,accs-x))
-            ,(desugar-pat `(ref ,elm-x) pat `(ref false) sig-params
-                (unpack-accs accs-x pvs^
-                  `(|[]| ,@update-accs))
-                qd)))
-
-        (lift-def! lambda-x lam-def)
+        (define desguared-sig-params (map desugar-ast sig-params))
 
         ;; Initial accs: [] [] ...
-        #|(define initial-accs
+        (define initial-accs
           (for/fold ([accs '()])
                     ([_ pvs])
             (cons '(|[]|) accs)))
@@ -246,32 +226,58 @@
         (define update-accs
           (for/list ([pv pvs]
                      [pv^ pvs^])
-            `((ref +) (ref none) (ref ,pv) (|[]| (ref ,pv^)))))
+            `((ref +) (ref ,pv) (|[]| (ref ,pv^)))))
+        
+        (define desugared-update-accs (map desugar-ast update-accs))
 
         (define loop-x (gensymb 'loop))
         (define x-slice (gensymb 'x_slice))
         (define x-elm (gensymb 'x_elm))
+
+        ;; TODO: remove duplicate is-splice? functions
+        (define (is-splice? e)
+         (match e
+          [`((ref ,ell) ,_) #:when (eq? ell '|...|)
+           #t]
+          [_ #f]))
+       
+        ;; TODO: remove duplicate code in enter-loop-e and recur-loop-e
+        (define enter-loop-e
+          (cond
+            ;; If a sig param is variadic, then splice it into the call to loop:
+            [(ormap is-splice? sig-params)
+              (define arg-list (desugar-ast `(|[]| ,x ,@initial-accs ,@sig-params)))
+              `((ref _apply_with_fallback) (ref none) (ref ,loop-x) (ref ,fallback-x) ,arg-list)]
+
+            ;; Normal loop call:
+            [else
+              `((ref ,loop-x) (ref ,fallback-x) ,x ,@initial-accs ,@desguared-sig-params)]))
+
+        (define recur-loop-e
+          (cond
+            ;; If a sig param is variadic, then splice it into the call to loop:
+            [(ormap is-splice? sig-params)
+              (define arg-list (desugar-ast `(|[]| ((ref rest) (ref ,x-slice)) ,@update-accs ,@sig-params)))
+              `((ref _apply_with_fallback) (ref none) (ref ,loop-x) (ref ,fallback-x) ,arg-list)]
+
+            ;; Normal loop call:
+            [else
+              `((ref ,loop-x) (ref ,fallback-x) ((ref rest) (ref none) (ref ,x-slice)) ,@desugared-update-accs ,@desguared-sig-params)]))
+
         (define loop-def
-          `(def ((ref ,loop-x) (ref ,fallback-x) ,@sig-params (ref ,x-slice) ,@pv-refs) ;; TODO: this causes problems.....
+          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
             (if ((ref is_empty) (ref none) (ref ,x-slice))
               ,body
 
               (let (ref ,x-elm) ((ref first) (ref none) (ref ,x-slice))
-                ,(desugar-pat `(ref ,x-elm) renamed-pat `(ref false) sig-params
-                    `((ref ,loop-x) (ref ,fallback-x) ,@sig-params ((ref rest) (ref none) (ref ,x-slice)) ,@update-accs)
+                ,(desugar-pat `(ref ,x-elm) renamed-pat fail-e sig-params
+                    recur-loop-e
                     qd)))))
 
         (lift-def! loop-x loop-def)
 
         `(if ((ref is_slice) (ref none) ,x)
-          ((ref ,loop-x) (ref ,fallback-x) ,@sig-params ,x ,@initial-accs)
-          ,fail-e)|#
-
-        `(if ((ref is_slice) (ref none) ,x)
-          (let (ref ,accs-x) ((ref _foldl) (ref none) (ref ,lambda-x) ,initial-accs ,x)
-              (if (ref ,accs-x)
-                ,(unpack-accs accs-x pvs body)
-                ,fail-e))
+          ,enter-loop-e
           ,fail-e)]
       
       [(cons e0 es)
@@ -294,6 +300,7 @@
 
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`)
   ;; body and fail-e must already be desugared
+  ;; sig-params must not be desugared yet
   (define (desugar-pat x pat fail-e sig-params body [qd 0])
     (define recur (lambda (pat0) (desugar-pat x pat0 fail-e sig-params body qd)))
 
@@ -682,9 +689,15 @@
 		             [next-x #f])
         (match ls
           ['()
-            (define params (pad-params 1))
-            `((def ((ref ,next-x) (ref ,fallback-x) ,@params)
-              (continue-dispatch (ref ,fallback-x) ,@params)))] ;; continue-dispatch: a special form (removed later on) that continues with the fallback
+            ;; params to pass on to the fallback (so-far is 2 since we generate the fallback and overflow-splice args seperately)
+            (define params (pad-params 2))
+
+            (define params-rest-x (gensymb 'rest-params))
+            (define ell '|...|)
+
+            ;; (... params-rest-x) will bind to a slice which is directly passed via continue-dispatch
+            `((def ((ref ,next-x) (ref ,fallback-x) ,@params (,ell (ref ,params-rest-x)))
+              (continue-dispatch (ref ,fallback-x) ,@params (ref ,params-rest-x))))] ;; continue-dispatch: a special form (removed later on) that continues with the fallback
           [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
             #:when obj-info ;; This is an obj-pattern def:
             (match-define (cons kind obj-tag) obj-info)

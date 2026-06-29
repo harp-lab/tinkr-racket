@@ -1,6 +1,11 @@
 
+def (write `[set])
+  "set"
+
+
 def (fun_i a b c ...)
   c
+
 
 def (fun_j a (? b int) c ...)
   c
@@ -8,6 +13,15 @@ def (fun_j a ...)
 {
   (debug_print "fun_j failed")
   a
+}
+
+
+def (fun_k (& xs `[set]) ...)
+  xs
+def (fun_k xs ...)
+{
+  (debug_print "fun_k failed")
+  xs
 }
 
 def (main)
@@ -32,4 +46,12 @@ def (main)
   (debug_print (write (fun_j 5 "string" 7 8 9 10)))
   (debug_print (write (fun_j 5 "string" 7 8 9 10 11)))
   (debug_print (write (fun_j 5 "string" 7 8 9 10 11 12)))
+
+  (debug_print "fun_k")
+  (debug_print (write (fun_k [])))
+  (debug_print (write (fun_k `[set])))
+  (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set])))
+
+  ;; This call should make use of all the arguments in the `continue-dispatch` form:
+  (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] 2)))
 }

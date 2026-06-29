@@ -134,11 +134,11 @@ def (_apply_with_fallback f fallback args)
 ;; r4 must be non-empty
 blessed (_raw__apply__with__fallback f fallback a0 a1 a2 a3 a4 r4)
 {
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, $2, $3, $4, $5, $6, (any)$7, (any)$8)" 
+  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, $2, $3, $4, $5, $6, $7, (any)$8)" 
                                                               f fallback a0 a1 a2 a3 a4
                                                               (deref (anys_t (top61 r4))) ;; get first (a5)
-                                                              (bit_or 2 ;; Retag as a slice
-                                                                      (plus (anys_t (top61 r4)) 1))) ;; get rest (r5)
+                                                              (u64bit_or 2 ;; Retag as a slice
+                                                                      (any_t (plus (anys_t (top61 r4)) 1)))) ;; get rest (r5)
   return 0
 }
 
