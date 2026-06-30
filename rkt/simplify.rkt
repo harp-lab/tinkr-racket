@@ -165,7 +165,9 @@
             
             (values (if overflow-x '() (list `(ref ,over-x)))
                     (lambda (b)
-                      `(let ,px (ref ,over-x)
+                      `(let ,px (if (bless ((ref equal) (ref ,noarg-x) (ref ,over-x)))
+                                    (ref _empty)
+                                    (ref ,over-x))
                           ,b)))])]
 
       [(cons px rest-ps)
@@ -244,7 +246,7 @@
        (cond
         [(or (equal? ef+ '(ref _raw__apply)) (equal? ef+ '(ref _raw__apply__with__fallback))) ; Special cases that don't gather the tail into a slice
           `(,ef+ ,@eas+)]
-        [(< (length eas+) (- bless-arg-count 1))
+        [(<= (length eas+) (- bless-arg-count 1))
           `(,ef+ ,@eas+)]
         [else ;; Overflow: gather tail into a slice
               (define head (take eas+ (- bless-arg-count 1)))
