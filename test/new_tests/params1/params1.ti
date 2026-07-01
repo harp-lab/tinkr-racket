@@ -24,6 +24,12 @@ def (fun_k xs ...)
   xs
 }
 
+def (fun_add x y)
+  (+ x y)
+def (fun_add x y rest ...)
+  (fun_add (+ x y) rest ...)
+
+
 def (main)
 {
   (debug_print "fun_i")
@@ -54,4 +60,11 @@ def (main)
 
   ;; This call should make use of all the arguments in the `continue-dispatch` form:
   (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] 2)))
+
+  ;; Tests that all (even unused) args are passed along to failx
+  (debug_print "fun_add")
+  (debug_print (write (fun_add 1 2)))
+  (debug_print (write (fun_add 1 2 3)))
+  (debug_print (write (fun_add 1 2 3 4)))
+  (debug_print (write (fun_add 1 2 3 4 5)))
 }

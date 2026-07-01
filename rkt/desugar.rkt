@@ -191,18 +191,37 @@
         (displayln (format "rename-pattern-variables failed for pattern: ~a" pat))
         (error 'rename-pattern-variables-error)]))
 
+  ;; Symbol Symbol (ListOf UndesugaredExpr) -> DesugaredExpr
+  ;; Generates an application of f-x on the parameters.
+  (define (construct-application-with-fallback f-x fallback-x params)
+    (define (is-splice? e)
+      (match e
+        [`((ref ,ell) ,_) #:when (eq? ell '|...|)
+        #t]
+        [_ #f]))
+
+    (cond
+      ;; If a sig param is variadic, then splice it into the call:
+      [(ormap is-splice? params)
+        (define arg-list (desugar-ast `(|[]| ,@params)))
+        `((ref _apply_with_fallback) (ref none) (ref ,f-x) (ref ,fallback-x) ,arg-list)]
+
+      ;; Normal loop call:
+      [else
+        `((ref ,f-x) (ref ,fallback-x) ,@(map desugar-ast params))]))
+
+  ;; `(ref ,Symbol) (ListOf Patterns) DesugaredExpr (or Symbol #f) (ListOf UndesugaredExpr) DesugaredExpr Int -> DesugaredExpr
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`) which should be a slice
-  ;; pats is a (ListOf Patterns)
   ;; body and fail-e must already be desugared
-  ;; sig-params must not be desugared yet
-  (define (desugar-pats x pats fail-e sig-params body [qd 0])
+  ;; If fail-x is #f then just use fail-e everywhere, otherwise fail-e needs to be local to the def (so fail-e can't be used inside of a new loop def).
+  (define (desugar-pats x pats fail-e fail-x sig-params body [qd 0])
     (match pats
       ['()
         `(if (bless ((ref equal) (ref empty) ,x)) ,body ,fail-e)]
       
       ;; Simple ref with ...
       [(list `((ref ,ell) (ref ,pat))) #:when (eq? ell '|...|)
-        (desugar-pat x `(ref ,pat) fail-e sig-params body qd)]
+        (desugar-pat x `(ref ,pat) fail-e fail-x sig-params body qd)]
       
       ;; Complex pattern with ...
       [(list `((ref ,ell) ,pat)) #:when (eq? ell '|...|)
@@ -233,36 +252,16 @@
         (define loop-x (gensymb 'loop))
         (define x-slice (gensymb 'x_slice))
         (define x-elm (gensymb 'x_elm))
-
-        ;; TODO: remove duplicate is-splice? functions
-        (define (is-splice? e)
-         (match e
-          [`((ref ,ell) ,_) #:when (eq? ell '|...|)
-           #t]
-          [_ #f]))
-       
-        ;; TODO: remove duplicate code in enter-loop-e and recur-loop-e
+        
         (define enter-loop-e
-          (cond
-            ;; If a sig param is variadic, then splice it into the call to loop:
-            [(ormap is-splice? sig-params)
-              (define arg-list (desugar-ast `(|[]| ,x ,@initial-accs ,@sig-params)))
-              `((ref _apply_with_fallback) (ref none) (ref ,loop-x) (ref ,fallback-x) ,arg-list)]
-
-            ;; Normal loop call:
-            [else
-              `((ref ,loop-x) (ref ,fallback-x) ,x ,@initial-accs ,@desguared-sig-params)]))
-
+          (construct-application-with-fallback loop-x fallback-x (append (list x) initial-accs sig-params)))
         (define recur-loop-e
-          (cond
-            ;; If a sig param is variadic, then splice it into the call to loop:
-            [(ormap is-splice? sig-params)
-              (define arg-list (desugar-ast `(|[]| ((ref rest) (ref ,x-slice)) ,@update-accs ,@sig-params)))
-              `((ref _apply_with_fallback) (ref none) (ref ,loop-x) (ref ,fallback-x) ,arg-list)]
+          (construct-application-with-fallback loop-x fallback-x (append (list `((ref rest) (ref ,x-slice))) update-accs sig-params)))
 
-            ;; Normal loop call:
-            [else
-              `((ref ,loop-x) (ref ,fallback-x) ((ref rest) (ref none) (ref ,x-slice)) ,@desugared-update-accs ,@desguared-sig-params)]))
+        (define loop-fail-e
+          (if fail-x
+              (construct-application-with-fallback fail-x fallback-x sig-params)
+              fail-e))
 
         (define loop-def
           `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
@@ -270,7 +269,7 @@
               ,body
 
               (let (ref ,x-elm) ((ref first) (ref none) (ref ,x-slice))
-                ,(desugar-pat `(ref ,x-elm) renamed-pat fail-e sig-params
+                ,(desugar-pat `(ref ,x-elm) renamed-pat loop-fail-e fail-x sig-params
                     recur-loop-e
                     qd)))))
 
@@ -291,29 +290,30 @@
                 ,(desugar-pat `(ref ,gx0)
                               e0
                               fail-e
+                              fail-x
                               sig-params
                               `(let (ref
                                     ,gx1)
                                 ,(desugar-ast `((ref rest) ,x))
-                                ,(desugar-pats `(ref ,gx1) es fail-e sig-params body qd))
+                                ,(desugar-pats `(ref ,gx1) es fail-e fail-x sig-params body qd))
                               qd)))]))
 
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`)
   ;; body and fail-e must already be desugared
   ;; sig-params must not be desugared yet
-  (define (desugar-pat x pat fail-e sig-params body [qd 0])
-    (define recur (lambda (pat0) (desugar-pat x pat0 fail-e sig-params body qd)))
+  (define (desugar-pat x pat fail-e fail-x sig-params body [qd 0])
+    (define recur (lambda (pat0) (desugar-pat x pat0 fail-e fail-x sig-params body qd)))
 
     (match pat
       ;; Quote Patterns
       [`((ref |`|) ,e0)
-       (desugar-pat x e0 fail-e sig-params body (+ qd 1))]
+       (desugar-pat x e0 fail-e fail-x sig-params body (+ qd 1))]
       [`((ref |,|) ,e0) #:when (= qd 0)
        `(if ((ref =) (ref none) ,x ,(desugar-ast e0))
             ,body
             ,fail-e)]
       [`((ref |,|) ,e0)
-       (desugar-pat x e0 fail-e sig-params body (- qd 1))]
+       (desugar-pat x e0 fail-e fail-x sig-params body (- qd 1))]
 
       [`(const ,v)
        `(if ((ref =) (ref none) ,x ,(desugar-ast `(const ,v)))
@@ -336,9 +336,9 @@
        (recur `((ref |&|) (ref ,px) ,@pats))]
 
       [`((ref |&|)) body]
-      [`((ref |&|) ,pat0) (desugar-pat x pat0 fail-e sig-params body qd)]
+      [`((ref |&|) ,pat0) (desugar-pat x pat0 fail-e fail-x sig-params body qd)]
       [`((ref |&|) ,pat0 ,pats ...)
-       (desugar-pat x pat0 fail-e sig-params
+       (desugar-pat x pat0 fail-e fail-x sig-params
                     (recur `((ref |&|) ,@pats))
                     qd)]
 
@@ -346,7 +346,7 @@
       [`((ref |[]|) ((ref |[]|) (ref _subword) ,pat0))
        (define x+ (gensymb 'subword))
        `(if (bless ((ref equal) (ref _subword) ((ref get_subword_tag) ,x)))
-            ,(desugar-pat x pat0 fail-e sig-params body qd)
+            ,(desugar-pat x pat0 fail-e fail-x sig-params body qd)
             ,fail-e)]
       
       ;; Subword patterns for a single 56bit int
@@ -359,7 +359,7 @@
             (let (ref ,sub-x) (bless ((ref box_subword)
                                         ((ref unbox_subword) ,x)
                                         (ref _subword)))
-              ,(desugar-pat `(ref ,sub-x) pat0 fail-e sig-params body qd))
+              ,(desugar-pat `(ref ,sub-x) pat0 fail-e fail-x sig-params body qd))
             ,fail-e)]
 
       ;; Special value patterns (slices, functions, etc)
@@ -367,7 +367,7 @@
        (define x+ (gensymb 'slice_ptr))
        `(if (bless ((ref equal) ((ref u64bit_and) (const 7) ,x) (const 2)))
             (let (ref ,x+) (bless ((ref top61) ,x))
-              ,(desugar-pat `(ref ,x+) e0 fail-e sig-params body qd))
+              ,(desugar-pat `(ref ,x+) e0 fail-e fail-x sig-params body qd))
             ,fail-e)]
       
       ;; Object patterns
@@ -379,13 +379,13 @@
        `(let (ref ttt) (bless ((ref get_object_tag) ,x))
         (if (bless ((ref equal) (ref ttt) (ref ,tag+)))
             (let (ref ,slice-x) (bless ((ref get_object_slice) ,x))
-              ,(desugar-pats `(ref ,slice-x) es fail-e sig-params body qd))
+              ,(desugar-pats `(ref ,slice-x) es fail-e fail-x sig-params body qd))
             ,fail-e))]
 
       ;; List patterns
       [`((ref |[]|) ,es ...)
         `(if ((ref is_slice) (ref none) ,x) ;; TODO: possibly allow [] patterns to match any iterable
-             ,(desugar-pats x es fail-e sig-params body qd)
+             ,(desugar-pats x es fail-e fail-x sig-params body qd)
              ,fail-e)]
 
       ;; ? patterns
@@ -397,10 +397,10 @@
              ,body
              ,fail-e))
 
-       (desugar-pat x `(ref ,pat) fail-e sig-params eval-pred qd)]
+       (desugar-pat x `(ref ,pat) fail-e fail-x sig-params eval-pred qd)]
 
       [`(,es ...) #:when (> qd 0) ;; TODO: is this case ever used?
-       (desugar-pats x es fail-e sig-params body qd)]
+       (desugar-pats x es fail-e fail-x sig-params body qd)]
 
       [_ 
         (displayln (format "desugar-pat failed for pattern: ~a" pat))
@@ -448,10 +448,10 @@
             (unless (null? rest-ps)
               (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
             (define rest-name (gensymb 'rest))
-            (values (list `((ref ,ell) (ref ,rest-name))) ; Keep ... for use in later passes and for fail-e
+            (values (list `((ref ,ell) (ref ,rest-name))) ; Keep ... for use in later passes
                     (list)
                     (lambda (b fail-ast sig-params)
-                      (desugar-pats `(ref ,rest-name) ps fail-ast sig-params b)))]
+                      (desugar-pats `(ref ,rest-name) ps fail-ast failx sig-params b)))]
            
            [(cons pat rest-ps)
             (define px (gen-pat-name pat))
@@ -473,29 +473,14 @@
                           arity-checks)
                       
                       (lambda (b fail-ast sig-params)
-                        (desugar-pat px pat fail-ast sig-params (binder b fail-ast sig-params)))))]))
+                        (desugar-pat px pat fail-ast failx sig-params (binder b fail-ast sig-params)))))]))
        
        ;; sig-params are the param names that will be matched on
        ;; arity-checks are guard expressions that need to be checked at the beginning of the body
        (define-values (sig-params arity-checks body-binder) (process-params params))
        
-       (define (is-splice? e)
-         (match e
-          [`((ref ,ell) ,_) #:when (eq? ell '|...|)
-           #t]
-          [_ #f]))
-       
-       ;; What to do if the patterns don't match: go to the next def (i.e. failx)
-       (define fail-e
-        (cond
-          ;; If a sig param is variadic, then splice it into the call to failx:
-          [(ormap is-splice? sig-params)
-            (define arg-list (desugar-ast `(|[]| ,@sig-params)))
-            `((ref _apply_with_fallback) (ref none) (ref ,failx) (ref ,fallback-x) ,arg-list)]
-
-          ;; Normal failx call:
-          [else
-            `((ref ,failx) (ref ,fallback-x) ,@sig-params)]))
+       ;; A special expression form (removed later on) encoding what to do if the patterns don't match: call the next def (i.e. failx)
+       (define fail-e `(fail (ref ,failx)))
 
        ;; Main body with pattern matching checks
        (define pattern-checks-body
@@ -609,7 +594,7 @@
          (desugar-ast `(bless ((ref fatal) (const "\"Let pattern failure.\"")))))
        (define rhsx (gensymb 'rhs))
        `(let (ref ,rhsx) ,(desugar-ast rhs)
-	     ,(desugar-pat `(ref ,rhsx) pat fail-e '() (desugar-ast body)))]
+	     ,(desugar-pat `(ref ,rhsx) pat fail-e #f '() (desugar-ast body)))]
       
       [`(if ,g ,t ,e)
        `(if ,(desugar-ast g) ,(desugar-ast t) ,(desugar-ast e))]

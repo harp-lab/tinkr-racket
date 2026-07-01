@@ -54,6 +54,9 @@
       [`(continue-dispatch ,es ...)
        `(continue-dispatch ,@(map recur es))]
 
+      [`(fail ,fail-ref)
+       `(fail ,(recur fail-ref))]
+
       [`(,ell ,e0) #:when (eq? ell '|...|)
        `(,ell ,(recur e0))]
       
@@ -216,32 +219,38 @@
                                        ((ref _rest) (ref _none) (ref ,overflow-x)))
                                 ,(binder b)))))))])]))
 
-  ;; Expr -> Expr
-  ;; Translate call sites to only take a fixed number of arguments
-  (define (translate-call-sites ast)
+  ;; Expr (ListOf `(ref ,Symbol)) -> Expr
+  ;; Translate call sites to only take a fixed number of arguments and
+  ;; translate `(fail ,fail-ref) expressions to `(,fail-ref ,@all-sig-params).
+  (define (translate-call-sites ast all-sig-params)
+    (define (recur ast) (translate-call-sites ast all-sig-params))
+
     (match ast
       [`(ref ,x) ast]
       [`(const ,v) ast]
       [`(bless ,e0) ast]
 
       [`(,ell ,e) #:when (eq? ell '|...|)
-       `(,ell ,(translate-call-sites e))]
+       `(,ell ,(recur e))]
 
       [`(,(and ctor (or 'object 'subword '|[]|)) ,eas ...)
-        `(,ctor ,@(map translate-call-sites eas))]
+        `(,ctor ,@(map recur eas))]
 
       [`(let ,x ,e0 ,e1)
-       `(let ,x ,(translate-call-sites e0) ,(translate-call-sites e1))]
+       `(let ,x ,(recur e0) ,(recur e1))]
 
       [`(if ,e0 ,e1 ,e2)
-       `(if ,(translate-call-sites e0) ,(translate-call-sites e1) ,(translate-call-sites e2))]
+       `(if ,(recur e0) ,(recur e1) ,(recur e2))]
 
       [`(continue-dispatch ,eas ...)
-       `(continue-dispatch ,@(map translate-call-sites eas))]
+       `(continue-dispatch ,@(map recur eas))]
+
+      [`(fail ,fail-ref)
+       `(,fail-ref ,@all-sig-params)]
 
       [`(,ef ,eas ...)
-       (define eas+ (map translate-call-sites eas))
-       (define ef+ (translate-call-sites ef))
+       (define eas+ (map recur eas))
+       (define ef+ (recur ef))
 
        (cond
         [(or (equal? ef+ '(ref _raw__apply)) (equal? ef+ '(ref _raw__apply__with__fallback))) ; Special cases that don't gather the tail into a slice
@@ -260,8 +269,12 @@
 
   (define-values (new-sig-params body-binder) (process-params params 0 #f))
 
-  `(def ((ref ,fname) (ref ,fallback-x) ,@new-sig-params)
-    ,(body-binder (translate-call-sites body))))
+  ;; Pad the params
+  (define extra-params (pad-params (+ (length new-sig-params) 1))) ;; +1 to account for the fallback
+  (define all-sig-params (append (list `(ref ,fallback-x)) new-sig-params extra-params))
+
+  `(def ((ref ,fname) ,@all-sig-params)
+    ,(body-binder (translate-call-sites body all-sig-params))))
 
 
 

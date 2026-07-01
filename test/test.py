@@ -214,7 +214,7 @@ def main():
     )
     parser.add_argument("--all", "-a", help="Perform all tests", action="store_true")
     parser.add_argument(
-        "--test", "-t", help="Perform a specific testname (case sensitive)"
+        "--test", "-t", nargs="*", type=str, help="Perform a specific testname (case sensitive; can pass multiple test names)"
     )
     parser.add_argument(
         "--iterations",
@@ -242,19 +242,21 @@ def main():
 
     if args.test:
         all = list_all_tests()
-        if args.test not in [test[0] for test in all]:
-            print(f"Error: test {args.test} does not exist.")
-            return
-        
-        test_dir = all[[test[0] for test in all].index(args.test)][1]
+        for test in args.test:
+            if test not in [test[0] for test in all]:
+                print(f"Error: test {test} does not exist.")
+                continue
+            
+            test_dir = all[[test[0] for test in all].index(test)][1]
 
-        path = os.path.abspath(os.path.join(PATH, test_dir, args.test))
-        tests = test_dir
-        if not os.path.exists(path):
-            print(f"Error: test {args.test} does not exist.")
-            return
+            path = os.path.abspath(os.path.join(PATH, test_dir, test))
+            tests = test_dir
+            if not os.path.exists(path):
+                print(f"Error: test {test} does not exist.")
+                continue
 
-        runtest(args.test, tests, racket_path, iters, quick=False)
+            runtest(test, tests, racket_path, iters, quick=False)
+            continue
         return
 
     if args.list:

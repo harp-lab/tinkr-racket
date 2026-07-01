@@ -1,7 +1,5 @@
 
 Failing tests (under `/new_tests`):
-- arithmetic?
-- bool?
 - fun2 (inner defs)
 - lambda
 - object_splicing
