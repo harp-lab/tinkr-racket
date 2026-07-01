@@ -137,8 +137,8 @@
       ;; Quotes
       [`((ref |`|) ,pat0)
        `((ref |`|) ,(rename-pattern-variables pat0 renaming (+ qd 1)))]
-      [`((ref |,|) ,pat0) #:when (= qd 0)
-       pat]
+      [`((ref |,|) ,pat0) #:when (= qd 0) ;; TODO: should we have this case?
+       `((ref |,|) ,(rename-pattern-variables pat0 renaming qd))]
       [`((ref |,|) ,pat0)
        `((ref |,|) ,(rename-pattern-variables pat0 renaming (- qd 1)))]
       
@@ -231,7 +231,7 @@
         (define renaming
           (for/hash ([pv pvs])
             (values pv (gensymb pv))))
-        (define renamed-pat (rename-pattern-variables pat renaming))
+        (define renamed-pat (rename-pattern-variables pat renaming qd))
         (define pvs^ (hash-values renaming))
 
         (define desguared-sig-params (map desugar-ast sig-params))
@@ -263,6 +263,7 @@
               (construct-application-with-fallback fail-x fallback-x sig-params)
               fail-e))
 
+        ;; TODO: need inner defs to make nested ... work
         (define loop-def
           `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
             (if ((ref is_empty) (ref none) (ref ,x-slice))
