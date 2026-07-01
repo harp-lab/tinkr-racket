@@ -18,6 +18,7 @@ def (test3 [(& xs `[set]) ...])
 def (test3 xs ...)
   false
 
+;; Nested patterns failing
 ;; Nested ... patterns
 def (test4 [(& lsts [(& xs `[set]) ...]) ...])
 {
