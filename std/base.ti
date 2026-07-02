@@ -91,17 +91,13 @@ def (_apply f args)
   let r4 = (rest r3)
   if (= r4 empty) (f a0 a1 a2 a3 a4)
   
-  let a5 = (first r4)
-  let r5 = (rest r4)
-  if (= r5 empty) (f a0 a1 a2 a3 a4 a5)
-  
-  (raw_apply f a0 a1 a2 a3 a4 a5 r5)
+  (raw_apply f a0 a1 a2 a3 a4 r4)
 
 ;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
-blessed (_raw__apply f a0 a1 a2 a3 a4 a5 r5)
+blessed (_raw__apply f a0 a1 a2 a3 a4 r4)
 {
   ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f a0 a1 a2 a3 a4 a5 r5)
+  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)0, $1, $2, $3, $4, $5, $6)" f a0 a1 a2 a3 a4 r4)
   return 0
 }
 
@@ -124,21 +120,18 @@ def (_apply_with_fallback f fallback args)
   let r3 = (rest r2)
   if (= r3 empty) (raw_apply_with_fallback f fallback a0 a1 a2 a3)
   
-  let a4 = (first r3)
-  let r4 = (rest r3)
-  if (= r4 empty) (raw_apply_with_fallback f fallback a0 a1 a2 a3 a4)
-  
-  (raw_apply_with_fallback f fallback a0 a1 a2 a3 a4 r4)
+  (raw_apply_with_fallback f fallback a0 a1 a2 a3 r3)
 
 ;; Helper (similar to _raw__apply) to apply f with a fallback argument
-;; r4 must be non-empty
-blessed (_raw__apply__with__fallback f fallback a0 a1 a2 a3 a4 r4)
+;; r3 must be non-empty
+blessed (_raw__apply__with__fallback f fallback a0 a1 a2 a3 r3)
 {
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, $2, $3, $4, $5, $6, $7, (any)$8)" 
-                                                              f fallback a0 a1 a2 a3 a4
-                                                              (deref (anys_t (top61 r4))) ;; get first (a5)
+  ;; TODO: passing 0 as arg count for now (same with regular apply)
+  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, (any)0, $2, $3, $4, $5, $6, (any)$7)" 
+                                                              f fallback a0 a1 a2 a3
+                                                              (deref (anys_t (top61 r3))) ;; get first (a4)
                                                               (u64bit_or 2 ;; Retag as a slice
-                                                                      (any_t (plus (anys_t (top61 r4)) 1)))) ;; get rest (r5)
+                                                                      (any_t (plus (anys_t (top61 r3)) 1)))) ;; get rest (r4)
   return 0
 }
 

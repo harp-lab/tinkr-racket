@@ -108,7 +108,7 @@
                method+ std-param o-param
                (format "  DBG(\"Method call to ~a (aka ~a): \" ~a);\n" method+ method
                    "<< DBG_VALUE(a0) << \", \" << DBG_VALUE(a1) << \", \"<< DBG_VALUE(a2) << \", \"<< DBG_VALUE(a3) << \", \"<< DBG_VALUE(a4) << \", \"<< DBG_VALUE(a5) << \", \"<< DBG_VALUE(a6)")
-               (format "  AVXRet r = vtable_lookup(~a,a0,(any)(u64)~a_pos,0,0,0,0,0,0);\n"
+               (format "  AVXRet r = vtable_lookup(~a,a1,(any)(u64)~a_pos,0,0,0,0,0,0);\n"
                    std-arg
                    method+)
                (format "  tailcall ~a(~a,~a_link,~a);\n"
@@ -177,7 +177,7 @@
 	     "any a0, any a1, any a2, any a3, any a4, any a5, any a6, any a7")))
   (define init-defs
     (string-append
-     (format "reg_passing AVXRet _main_shim(~a, ~a)\n{\n  tailcall _main(alloc_fr, alloc_bk, stack_fr, (any)0, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg);\n}\n"
+     (format "reg_passing AVXRet _main_shim(~a, ~a)\n{\n  tailcall _main(alloc_fr, alloc_bk, stack_fr, (any)0, (any)0, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg, (any)_u__noarg);\n}\n"
              "many alloc_fr, many alloc_bk, many stack_fr"
              "any a0, any a1, any a2, any a3, any a4, any a5, any a6, any a7")
      (format "reg_passing AVXRet entry_point_init(~a,~a)\n{\n AVXRet r;\n~a~a~a~a}\n"

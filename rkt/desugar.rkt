@@ -19,6 +19,7 @@
   (define (register-type! tag) (set! types-st (set-add types-st tag)) tag)
   
   (define fallback-x (gensymb 'fallback))
+  (define arg-count-x (gensymb 'arg_count))
 
   (define special '(_slice _fun_ptr _subword)) ;; TODO: do we need _fun_ptr anymore?
   (define this-mod-tag (gensymb (gensymb 'm))) 
@@ -42,12 +43,16 @@
   ;; Expr Expr -> Expr
   ;; For debuging purposes.
   (define (with-print-debug-desguared val-ast ast)
-    `((ref |;|) (ref none)
-          ((ref debug_print) (ref none) ((ref write) (ref none) ,val-ast))
+    `((ref |;|) (ref none) (bless (const 2))
+          ((ref debug_print) (ref none) (bless (const 1)) ((ref write) (ref none) (bless (const 1)) ,val-ast))
           ,ast))
   (define (with-print-debug val-ast ast)
     `((ref |;|)
           ((ref debug_print) ((ref write) ,val-ast))
+          ,ast))
+  (define (with-print-value val-ast ast)
+    `(let (ref ,(gensymb '_))
+          (bless ((ref print_debug_value) ,val-ast))
           ,ast))
 
   ;; Expr -> (SetOf Symbol)
@@ -117,11 +122,11 @@
     (match pvs
       ['() body]
       [`(,a)
-        `(let (ref ,a) ((ref first) (ref none) (ref ,accs-x))
+        `(let (ref ,a) ((ref first) (ref none) (bless (const 1)) (ref ,accs-x))
            ,body)]
       [`(,a . ,b)
-        `(let (ref ,a) ((ref first) (ref none) (ref ,accs-x))
-          (let (ref ,accs-x) ((ref rest) (ref none) (ref ,accs-x))
+        `(let (ref ,a) ((ref first) (ref none) (bless (const 1)) (ref ,accs-x))
+          (let (ref ,accs-x) ((ref rest) (ref none) (bless (const 1)) (ref ,accs-x))
             ,(unpack-accs accs-x b body)))]))
 
   ;; Expr (HashOf Symbol Symbol) -> Expr
@@ -204,7 +209,7 @@
       ;; If a sig param is variadic, then splice it into the call:
       [(ormap is-splice? params)
         (define arg-list (desugar-ast `(|[]| ,@params)))
-        `((ref _apply_with_fallback) (ref none) (ref ,f-x) (ref ,fallback-x) ,arg-list)]
+        `((ref _apply_with_fallback) (ref none) (bless (const 3)) (ref ,f-x) (ref ,fallback-x) ,arg-list)]
 
       ;; Normal loop call:
       [else
@@ -265,18 +270,18 @@
 
         ;; TODO: need inner defs to make nested ... work
         (define loop-def
-          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
-            (if ((ref is_empty) (ref none) (ref ,x-slice))
+          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
+            (if ((ref is_empty) (ref none) (bless (const 1)) (ref ,x-slice))
               ,body
 
-              (let (ref ,x-elm) ((ref first) (ref none) (ref ,x-slice))
+              (let (ref ,x-elm) ((ref first) (ref none) (bless (const 1)) (ref ,x-slice))
                 ,(desugar-pat `(ref ,x-elm) renamed-pat loop-fail-e fail-x sig-params
                     recur-loop-e
                     qd)))))
 
         (lift-def! loop-x loop-def)
 
-        `(if ((ref is_slice) (ref none) ,x)
+        `(if ((ref is_slice) (ref none) (bless (const 1)) ,x)
           ,enter-loop-e
           ,fail-e)]
       
@@ -310,20 +315,20 @@
       [`((ref |`|) ,e0)
        (desugar-pat x e0 fail-e fail-x sig-params body (+ qd 1))]
       [`((ref |,|) ,e0) #:when (= qd 0)
-       `(if ((ref =) (ref none) ,x ,(desugar-ast e0))
+       `(if ((ref =) (ref none) (bless (const 2)) ,x ,(desugar-ast e0))
             ,body
             ,fail-e)]
       [`((ref |,|) ,e0)
        (desugar-pat x e0 fail-e fail-x sig-params body (- qd 1))]
 
       [`(const ,v)
-       `(if ((ref =) (ref none) ,x ,(desugar-ast `(const ,v)))
+       `(if ((ref =) (ref none) (bless (const 2)) ,x ,(desugar-ast `(const ,v)))
             ,body
             ,fail-e)]
 
       ;; ref pattern qd>0:  
       [`(ref ,y) #:when (> qd 0)
-       `(if ((ref =) (ref none) ,x ,(desugar-ast `(const ,y)))
+       `(if ((ref =) (ref none) (bless (const 2)) ,x ,(desugar-ast `(const ,y)))
             ,body
             ,fail-e)]
 
@@ -385,7 +390,7 @@
 
       ;; List patterns
       [`((ref |[]|) ,es ...)
-        `(if ((ref is_slice) (ref none) ,x) ;; TODO: possibly allow [] patterns to match any iterable
+        `(if ((ref is_slice) (ref none) (bless (const 1)) ,x) ;; TODO: possibly allow [] patterns to match any iterable
              ,(desugar-pats x es fail-e fail-x sig-params body qd)
              ,fail-e)]
 
@@ -394,7 +399,7 @@
        #:when (= qd 0)
 
        (define eval-pred
-        `(if ((ref ,pred) (ref none) (ref ,pat))
+        `(if ((ref ,pred) (ref none) (bless (const 1)) (ref ,pat))
              ,body
              ,fail-e))
 
@@ -503,7 +508,7 @@
        ;; Call desugar-ast on each param in the case there is a (ref ...) that needs the ref removed
        (define desguared-sig-params (map desugar-ast sig-params))
 
-       `(def ((ref ,name) (ref ,fallback-x) ,@desguared-sig-params)
+       `(def ((ref ,name) (ref ,fallback-x) (ref ,arg-count-x) ,@desguared-sig-params)
           ,final-body)]))
   
   ;; The main desugarer
@@ -526,13 +531,13 @@
       [`(const ,(? integer? z))
        #:when (< (- 0 (expt 2 48)) z (expt 2 48))
        ;; first none is for the fallback as this is an external call
-       `((ref _init_from_s64) (ref none) (ref none) (bless (const ,z)))]
+       `((ref _init_from_s64) (ref none) (bless (const 2)) (ref none) (bless (const ,z)))]
       [`(const ,(? integer? z))
        ;; first none is for the fallback as this is an external call
-       `((ref _init_from_int_cstr) (ref none) (ref none) (bless (const ,(~s (~a z)))))]
+       `((ref _init_from_int_cstr) (ref none) (bless (const 2)) (ref none) (bless (const ,(~s (~a z)))))]
       [`(const ,(? string? s))
        ;; second none here is idiom to avoid dispatch on naked values
-       `((ref _init_from_cstr) (ref none) (ref none) (bless (const ,(~s s))))]
+       `((ref _init_from_cstr) (ref none) (bless (const 2)) (ref none) (bless (const ,(~s s))))]
       
       ;; Quoted sub-word values
       [`((ref |[]|) ((ref |[]|) (ref ,tag) ,es ...))
@@ -621,7 +626,7 @@
        (match chunks
         [`() `(ref empty)] 
         [`(,e0 ,es ...)
-          (foldl (lambda (e1 e0) `((ref +) (ref none) ,e0 ,e1)) e0 es)])]
+          (foldl (lambda (e1 e0) `((ref +) (ref none) (bless (const 2)) ,e0 ,e1)) e0 es)])]
 
       [`((ref |{}|)) '(ref none)]
       [`((ref |{}|) ,es ... ,elast)
@@ -646,9 +651,9 @@
           `(,ef+ ,@es+)]
         [(ormap is-splice? es+)
           (define arg-list (desugar-ast `(|[]| ,@es) qd))
-          `((ref _apply) (ref none) ,ef+ ,arg-list)]
+          `((ref _apply) (ref none) (bless (const 2)) ,ef+ ,arg-list)]
         [else
-          `(,ef+ (ref none) ,@es+)])]
+          `(,ef+ (ref none) (bless (const ,(length es+))) ,@es+)])]
       
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
@@ -754,7 +759,7 @@
              (hash-keys lifted-defs)))
 
      (define init-def
-       `(def ((ref ,(sym-append "entry_point_" this-mod-tag)) (ref _fb))
+       `(def ((ref ,(sym-append "entry_point_" this-mod-tag)) (ref _fb) (ref ,(gensymb 'arg_count)))
 	     ,(desugar-ast
 	       `((ref |{}|)
             ,@(map (lambda (letast)

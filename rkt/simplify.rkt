@@ -110,7 +110,7 @@
 
 (define (with-debug-print val-ast ast)
   `(let (ref ,(gensymb '_))
-        ((ref _debug__print) (ref _none) ((ref _write) (ref _none) ,val-ast))
+        ((ref _debug__print) (ref _none) (bless (const 1)) ((ref _write) (ref _none) (bless (const 1)) ,val-ast))
         ,ast))
 
 (define (with-print-value val-ast ast)
@@ -128,9 +128,9 @@
 ;; A pass that limits the number of arguments a function takes.
 (define (limit-def-params ast)
   (define noarg-x '_u__noarg)
-  (define standard-arg-count (- bless-arg-count 2)) ;; Number of blessed args not including the overflow slice or fallback
+  (define standard-arg-count (- bless-arg-count 3)) ;; Number of blessed args not including the overflow slice or fallback or arg-count
   
-  (match-define `(def ((ref ,fname) (ref ,fallback-x) ,params ...) ,body) ast)
+  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body) ast)
 
   ;; (ListOf Expr) Int (or Symbol #f) -> (ValuesOf (ListOf Symbol) Lambda)
   ;; Processes def param list to cap the number of params.
@@ -157,7 +157,7 @@
               (values `(,@gather-refs (ref ,slice-var))
                       (lambda (b)
                         `(let ,px 
-                              ((ref _u__gather) (ref _none) ,@gather-refs ,@pad-noargs (|[]| (ref ,slice-var))) ; gathers the gather-refs and slice-var into a single slice
+                              ((ref _u__gather) (ref _none) (bless (const ,standard-arg-count)) ,@gather-refs ,@pad-noargs (|[]| (ref ,slice-var))) ; gathers the gather-refs and slice-var into a single slice
                             ,b))))]
           
           ;; Everything is in the overflow slice, so just bind it to the correct name: px
@@ -194,13 +194,13 @@
                                     (ref ,noarg-x)
                                     (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
                                         (ref ,noarg-x)
-                                        ((ref _first) (ref _none) ,slice-ref)))
+                                        ((ref _first) (ref _none) (bless (const 1)) ,slice-ref)))
                               (let (ref ,next-slice-x)
                                    (if (bless ((ref equal) (ref ,noarg-x) ,slice-ref)) ;; Check overflow arg exists
                                        (ref _empty)
                                        (if (bless ((ref equal) (ref _empty) ,slice-ref)) ;; Check not empty
                                            (ref _empty)
-                                           ((ref _rest) (ref _none) ,slice-ref)))
+                                           ((ref _rest) (ref _none) (bless (const 1)) ,slice-ref)))
                                 ,(binder b)))))))]
 
           ;; Rest of the params to put into the overflow list
@@ -212,11 +212,11 @@
                           `(let ,px
                                 (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
                                     (ref ,noarg-x)
-                                    ((ref _first) (ref _none) (ref ,overflow-x)))
+                                    ((ref _first) (ref _none) (bless (const 1)) (ref ,overflow-x)))
                               (let (ref ,next-slice-x)
                                    (if (bless ((ref equal) (ref _empty) (ref ,overflow-x))) ;; Check not empty
                                        (ref _empty)
-                                       ((ref _rest) (ref _none) (ref ,overflow-x)))
+                                       ((ref _rest) (ref _none) (bless (const 1)) (ref ,overflow-x)))
                                 ,(binder b)))))))])]))
 
   ;; Expr (ListOf `(ref ,Symbol)) -> Expr
@@ -270,8 +270,8 @@
   (define-values (new-sig-params body-binder) (process-params params 0 #f))
 
   ;; Pad the params
-  (define extra-params (pad-params (+ (length new-sig-params) 1))) ;; +1 to account for the fallback
-  (define all-sig-params (append (list `(ref ,fallback-x)) new-sig-params extra-params))
+  (define extra-params (pad-params (+ (length new-sig-params) 2))) ;; +2 to account for the fallback and arg-count
+  (define all-sig-params (append (list `(ref ,fallback-x) `(ref ,arg-count-x)) new-sig-params extra-params))
 
   `(def ((ref ,fname) ,@all-sig-params)
     ,(body-binder (translate-call-sites body all-sig-params))))
@@ -413,7 +413,7 @@
       (define freelst (set->list (set-remove (free body) x)))
       (define kname (gensymb (sym-append defname type)))
       (lift-def! ;; assumes def interface w/ dummy fallback
-       `(def ((ref ,kname) (ref ,(gensymb '_)) (ref ,x))
+       `(def ((ref ,kname) (ref ,(gensymb '_)) (ref ,(gensymb '_)) (ref ,x))
 	     ,(foldl
          (lambda (free-x body+)
 		       `(let (ref ,free-x) (bless ((ref stack_pop)))
@@ -541,7 +541,7 @@
                         [`(,_ ... ((ref =) (ref ,v2) ,_)) c2])
               (join-chunks (cons (append c1 c2 
 					 `(((ref =) (ref ,(gensymb 'join)) 
-					    ((ref +) (ref none) (ref ,v1) (ref ,v2)))))
+					    ((ref +) (ref none) (bless (const 2)) (ref ,v1) (ref ,v2)))))
 				 rest)))]))
 
        (define-values (all-chunks last-chunk)
@@ -597,7 +597,7 @@
       [`(return ,ae)
        (define kfun (gensymb 'kfun)) ;; nonlocal stack cont
        `(((ref =) (ref ,kfun) ((ref stack_pop)))
-	        (return ((ref ,kfun) (const 0) ,ae)))] ;; Q: why calling with (const 0) instead of (ref none)?
+	        (return ((ref ,kfun) (const 0) (const 1) ,ae)))] ;; Q: why calling with (const 0) instead of (ref none)?
       
       ;; Emit a method call based on the _pos and _link variables
       [`((ref ,fx)) (error "Not yet supported: thunk call, no args")]
