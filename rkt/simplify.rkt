@@ -157,7 +157,9 @@
               (values `(,@gather-refs (ref ,slice-var))
                       (lambda (b)
                         `(let ,px 
-                              ((ref _u__gather) (ref _none) (bless (const ,standard-arg-count)) ,@gather-refs ,@pad-noargs (|[]| (ref ,slice-var))) ; gathers the gather-refs and slice-var into a single slice
+                              ((ref _u__gather) (ref _none)
+                                                (bless (const ,(+ standard-arg-count 1))) ; +1 for slice-var argument
+                                                ,@gather-refs ,@pad-noargs (|[]| (ref ,slice-var))) ; gathers the gather-refs and slice-var into a single slice
                             ,b))))]
           
           ;; Everything is in the overflow slice, so just bind it to the correct name: px

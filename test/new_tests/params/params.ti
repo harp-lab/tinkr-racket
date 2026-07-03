@@ -7,7 +7,7 @@ def (f5 a b c d e)
 def (f6 a b c d e g) 
   g + e + d + c + b + a
 
-;; Exactly 7 parameters to force the use of a0-a5 plus the slice overflow
+;; 7 params
 def (f7 a b c d e g h) 
   h + g + e + d + c + b + a
 
@@ -22,11 +22,11 @@ def (main)
   let s8 = [1 2 3 4 5 6 7 8]
   (debug_print (write (f5 1 2 3 4 5)));
   (debug_print (write (f6 1 2 3 4 5 6)));
-  (debug_print (write (f7 1 2 3 4 5 6 7))); ;; Exactly 7 elements
+  (debug_print (write (f7 1 2 3 4 5 6 7)));
   (debug_print (write (f8 1 2 3 4 5 6 7 8)));
   (debug_print (write (f5 s5 ...)));
   (debug_print (write (f6 s6 ...)));
-  (debug_print (write (f7 s7 ...))); ;; Spread exactly 7 elements
+  (debug_print (write (f7 s7 ...)));
   (debug_print (write (f8 s8 ...)))
 
 

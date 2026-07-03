@@ -10,3 +10,6 @@ blessed (_print_subword_debug x)
 blessed (with_print_debug_value x d) ("std::cout << \"Value: \" << $0 << std::endl; $1" d x)
 blessed (print_debug_value_statement d) ("std::cout << \"Value: \" << $0 << std::endl; 1" d)
 blessed (print_debug_value d) ("((std::cout << \"Value: \" << $0 << std::endl), 1)" d)
+
+;; Also, can use:
+;; do ("DBG(\"val: \" << DBG_VALUE($0))" val)

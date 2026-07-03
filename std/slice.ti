@@ -49,22 +49,25 @@ def (is_slice x) false
 ;; Concatenation
 
 def (+ `[_slice ,s1] `[_slice ,s2])
-  let n1 = (bless (slice_len s1))
-  let n2 = (bless (slice_len s2))
+  let n1 = (bless (_slice_len s1))
+  let n2 = (bless (_slice_len s2))
     (bless (slice_concat s1 n1 s2 n2))
 
 def (+ ,empty x) x
 def (+ x=`[_slice ,_] ,empty) x
 
 
-blessed (slice_len ptr)
+;;def (slice_len `[_slice ,s])
+;;  (bless (_init_from_s64 none (_slice_len s)))
+
+blessed (_slice_len ptr)
 {
   val = (deref (anys_t ptr))
   ;; Terminate on 0 (uninitialized) or 255 (next object header)
   if (u64bit_or (eq 0 val) (eq 255 (u64bit_and 255 val)))
     return 0
     {
-      a = (slice_len (plus 1 (anys_t ptr)))
+      a = (_slice_len (plus 1 (anys_t ptr)))
       return (s64plus 1 a)
     }
 }

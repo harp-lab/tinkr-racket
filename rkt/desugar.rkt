@@ -427,27 +427,18 @@
           [`(const ,v) `(ref ,(gensymb 'const))]
           [_ `(ref ,(gensymb 'pat))]))
 
-       ;; (ListOf PatternExpr) -> (ValuesOf (ListOf `(ref ,Symbol)) (ListOf Expr) Lambda)
-       ;; Returns a list of all pattern/param names,
-       ;; a list of guard expressions for arity checks (which should eval to true on success),
+       ;; (ListOf PatternExpr) -> (ValuesOf (ListOf `(ref ,Symbol)) Int Bool Lambda)
+       ;; Returns a list of all pattern/param names, the arity (not including anything after an ellipsis),
+       ;; a boolean indicating whether an ellipsis/unsplice has occured,
        ;; and a binder lambda which contains the built up output code to run the pattern matching.
        (define (process-params ps)
          (match ps
            ;; done with params
            ['()
-            ;; pad check to ensure that the caller did not pass too many arguments
-            (define pc (gensymb 'pad_check))
-
-            (cond
-              ;; Special case: don't add the pad check for _gather
-              [(eq? fname '_gather)
-                (values (list)
-                        (list)
-                        (lambda (b fail-ast sig-params) b))]
-              [else
-                (values (list `(ref ,pc))
-                        (list `(bless ((ref equal) (ref _noarg) (ref ,pc))))
-                        (lambda (b fail-ast sig-params) b))])]
+            (values (list)
+                    0
+                    #f
+                    (lambda (b fail-ast sig-params) b))]
            
            ;; ellipsis case
            [(cons `((ref ,ell) ,inner-pat) rest-ps) #:when (eq? ell '|...|)
@@ -455,35 +446,23 @@
               (error 'desugar "Vararg splice (...) must be the final parameter in a definition."))
             (define rest-name (gensymb 'rest))
             (values (list `((ref ,ell) (ref ,rest-name))) ; Keep ... for use in later passes
-                    (list)
+                    0
+                    #t
                     (lambda (b fail-ast sig-params)
                       (desugar-pats `(ref ,rest-name) ps fail-ast failx sig-params b)))]
            
            [(cons pat rest-ps)
             (define px (gen-pat-name pat))
             
-            ;; Is the last param before end or ...
-            (define is-last-param
-              (match rest-ps
-                    ['() #t]
-                    [(cons `((ref ,ell) ,inner-pat) rest-ps) #:when (eq? ell '|...|) #t]
-                    [_ #f]))
-            
-            (let-values ([(rest-px arity-checks binder) (process-params rest-ps)])
+            (let-values ([(rest-px arity has-unsplice binder) (process-params rest-ps)])
               (values (cons px rest-px)
-
-                      ;; Only need to do the _noarg check for the last param (not including ... params)
-                      (if (and is-last-param
-                               (not (eq? fname '_gather))) ;; Special case: _gather allows passing _noarg
-                          (cons `(bless ((ref convert_bool) ((ref neq) (ref _noarg) ,px))) arity-checks)
-                          arity-checks)
-                      
+                      (+ arity 1)
+                      has-unsplice
                       (lambda (b fail-ast sig-params)
                         (desugar-pat px pat fail-ast failx sig-params (binder b fail-ast sig-params)))))]))
        
        ;; sig-params are the param names that will be matched on
-       ;; arity-checks are guard expressions that need to be checked at the beginning of the body
-       (define-values (sig-params arity-checks body-binder) (process-params params))
+       (define-values (sig-params arity has-unsplice body-binder) (process-params params))
        
        ;; A special expression form (removed later on) encoding what to do if the patterns don't match: call the next def (i.e. failx)
        (define fail-e `(fail (ref ,failx)))
@@ -497,13 +476,16 @@
             fail-e
             sig-params))
 
-       ;; Add in arity checks
+       ;; Add in arity check
        (define final-body
-        (for/fold ([b pattern-checks-body])
-                  ([guard-expr arity-checks])
-          `(if ,guard-expr
-               ,b
-               ,fail-e)))
+        (if has-unsplice
+            `(if (bless ((ref convert_bool) ((ref not) ((ref u64lt) (ref ,arg-count-x) (const ,arity)))))
+                  ,pattern-checks-body
+                  ,fail-e)
+              
+            `(if (bless ((ref equal) (ref ,arg-count-x) (const ,arity)))
+                  ,pattern-checks-body
+                  ,fail-e)))
 
        ;; Call desugar-ast on each param in the case there is a (ref ...) that needs the ref removed
        (define desguared-sig-params (map desugar-ast sig-params))

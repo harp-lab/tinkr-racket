@@ -23,6 +23,14 @@ def (f8 a b c d e g h i ...)
 def (f8 a ...)
   false
 
+def (f_test a (? b int) c d e g h i ...)
+  [a b c d e g h i]
+def (f_test a b c d e f g h i j)
+  ["part way" a b c d e f g h i j]
+def (f_test a ...)
+  "all the way"
+
+
 def (main)
 {
   let s10 [1 2 3 4 5 6 7 8 9 10]
@@ -39,5 +47,9 @@ def (main)
     (debug_print (write (f8 1 2 3 4 5 6)))
     (debug_print (write (f8 1 2 3 4 5 6 7)))
     (debug_print (write (f8 s10 ...)))
+
+    (debug_print (write (f_test s10 ...)))
+    (debug_print (write (f_test 1 "hi" 2 3 4 5 6 7 8 9))) ;; Part way
+    (debug_print (write (f_test 1 "hi" 2 3 4 5 6 7 8 9 10))) ;; All the way
   }
 }

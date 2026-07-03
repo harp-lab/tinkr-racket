@@ -96,8 +96,11 @@ def (_apply f args)
 ;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
 blessed (_raw__apply f a0 a1 a2 a3 a4 r4)
 {
+  r4_ptr = (anys_t (top61 r4))
+  r4_length = (_slice_len r4_ptr)
+
   ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)0, $1, $2, $3, $4, $5, $6)" f a0 a1 a2 a3 a4 r4)
+  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)((u64)5 + (u64)$1), $2, $3, $4, $5, $6, $7)" f r4_length a0 a1 a2 a3 a4 r4)
   return 0
 }
 
@@ -126,34 +129,35 @@ def (_apply_with_fallback f fallback args)
 ;; r3 must be non-empty
 blessed (_raw__apply__with__fallback f fallback a0 a1 a2 a3 r3)
 {
-  ;; TODO: passing 0 as arg count for now (same with regular apply)
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, (any)0, $2, $3, $4, $5, $6, (any)$7)" 
-                                                              f fallback a0 a1 a2 a3
+  r4_ptr = (any_t (plus (anys_t (top61 r3)) 1)) ;; get rest (r4)
+  r4_length = (_slice_len r4_ptr)
+  r4_slice = (u64bit_or 2 r4_ptr) ;; Retag as a slice
+
+  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, (any)((u64)5 + (u64)$2), $3, $4, $5, $6, $7, (any)$8)" 
+                                                              f fallback r4_length a0 a1 a2 a3
                                                               (deref (anys_t (top61 r3))) ;; get first (a4)
-                                                              (u64bit_or 2 ;; Retag as a slice
-                                                                      (any_t (plus (anys_t (top61 r3)) 1)))) ;; get rest (r4)
+                                                              r4_slice) 
   return 0
 }
 
 
 ;; Runtime gatherer for dynamically building vararg slices from registers
-def (_gather a0 a1 a2 a3 a4 a5 a6)
+def (_gather a0 a1 a2 a3 a4 a5)
   let base_slice = 
-    if (bless (equal a3 _noarg))
-      ;; Length is between 0 and 3
+    if (bless (equal a2 _noarg))
+      ;; Length is between 0 and 2
       if (bless (equal a0 _noarg)) empty
       if (bless (equal a1 _noarg)) [a0]
-      if (bless (equal a2 _noarg)) [a0 a1]
-      [a0 a1 a2]
-    ;; Length is between 4 and 6
+      [a0 a1]
+    ;; Length is between 3 and 5
+    if (bless (equal a3 _noarg)) [a0 a1 a2]
     if (bless (equal a4 _noarg)) [a0 a1 a2 a3]
-    if (bless (equal a5 _noarg)) [a0 a1 a2 a3 a4]
-    [a0 a1 a2 a3 a4 a5]
+    [a0 a1 a2 a3 a4]
   
-  ;; Always treat a6 as variadic
-  if (bless (equal a6 _noarg))
+  ;; Always treat a5 as variadic
+  if (bless (equal a5 _noarg))
     base_slice
-    base_slice + a6
+    base_slice + a5
 
 ;; Vtable lookup and dispatch
 blessed (vtable_lookup arg0 pos)
