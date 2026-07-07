@@ -1,0 +1,18 @@
+
+def (g x y z)
+  (+ x y z)
+
+def (f x y)
+  def (g z)
+    (+ x y z)
+  def (g z a)
+    (+ x y z a)
+  
+  {
+    (debug_print (write (g 3)))     ;; 6
+    (debug_print (write (g 3 4)))   ;; 10
+    (debug_print (write (g 3 4 5))) ;; 12
+  }
+
+def (main)
+  (f 1 2)

@@ -621,6 +621,10 @@
       
       ;; Bless expression
       [`(bless ,es ...) `(bless ,@es)]
+      
+      ;; Inner def
+      [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more)
+        (desugar-inner-def ast)]
 
       ;; Untagged application
       [`(,ef ,es ...)
@@ -640,6 +644,91 @@
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
   
+  ;; AST -> (ValuesOf (ListOf AST) AST)
+  (define (get-sibling-inner-defs def-ast)
+    (match def-ast
+      [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more)
+        (define-values (defs rest) (get-sibling-inner-defs more))
+
+        (values
+          (append
+            (list `(def ((ref ,x) ,@args) ,@maybe-when ,body))
+            defs)
+          rest)]
+      
+      [_ 
+        (values
+          '()
+          def-ast)]))
+
+  ;; AST -> AST
+  (define (desugar-inner-def def-ast)
+    (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
+
+    (define defs-by-name
+      (for/fold ([defs-by-name (hash)])
+                ([def defs])
+        (match def
+          [`(def ((ref ,x) ,_ ...) ,_ ...)
+            (define def-group (hash-ref defs-by-name x '()))
+            (hash-set defs-by-name x (append def-group (list def)))])))
+
+    (define-values (def-groups def-renamings)
+      (for/fold ([def-groups (list)]
+                 [def-renamings (hash)])
+                ([(def-name defs) (in-hash defs-by-name)])
+        (define first-def-name (gensymb def-name))
+
+        ;; Desugar each def
+        (define-values (defs+ new-def-x)
+          (for/fold ([defs+ (list)]
+                    [new-def-x first-def-name])
+                    ([def defs])
+            (match def
+              [`(def ((ref ,x) ,_ ...) ,_ ...)
+                  (define next-def-x (gensymb x))
+                  (values (append defs+
+                                  (list (desugar-one-def new-def-x next-def-x def)))
+                          next-def-x)])))
+
+        (define args-rest-x (gensymb 'args_rest))
+        (define last-def+
+          `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
+              ,(desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))))
+
+        (values
+          (cons
+            (append defs+ (list last-def+))
+            def-groups)
+          (hash-set def-renamings first-def-name def-name))))
+
+    (define (add-renaming-lets body)
+      (for/fold ([body body])
+                ([(first-def-name main-name) (in-hash def-renamings)])
+        `(let (ref ,main-name) (ref ,first-def-name)
+            ,body)))
+
+    (define all-defs
+      (for/fold ([all-defs (list)])
+                ([def-group def-groups])
+        (define new-defs
+          (append
+            (for/list ([def (drop-right def-group 1)])
+              (match def
+                [`(def ,param-list ,maybe-when ... ,body)
+                 `(def ,param-list ,@maybe-when
+                    ,(add-renaming-lets body))]))
+            (list (last def-group))))
+        
+        (append new-defs all-defs)))
+
+    ;; Splices the defs back together with `rest-ast` at the center
+    (for/fold ([inner-ast (add-renaming-lets (desugar-ast rest-ast))])
+              ([def (reverse all-defs)])
+      (match def
+        [`(def ((ref ,x) ,params ...) ,maybe-when ... ,body)
+          `(def ((ref ,x) ,@params) ,@maybe-when ,body ,inner-ast)])))
+
   ;; returns an obj tag if its an obj pat, or #f if not
   (define (object-method-pat? pat [qd 0])
     (define (recur? pat) (object-method-pat? pat qd))

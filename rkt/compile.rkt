@@ -35,7 +35,8 @@
 		       (pretty-write result)))
         #:exists 'replace)))
    
-  (compile-step ".ti" ".core" desugar-pass)
+  (compile-step ".ti" ".ti_loaded" load-module-pass)
+  (compile-step ".ti_loaded" ".core" desugar-pass)
   (compile-step ".core" ".bl" simplify-lower-pass)
   (compile-step ".bl" ".cpp" compile-bl-pass)
   (compile-step ".bl" ".h" compile-bl-decls-pass)
@@ -45,9 +46,12 @@
 
 ;;;;;;;;;; Individual Passes ;;;;;;;;;;;;
 
+(define (load-module-pass src-path)
+  (load-module src-path))
 
 (define (desugar-pass src-path)
-  (define mod (load-module src-path))
+  ;;(define mod (load-module src-path))
+  (define mod (with-input-from-file src-path read))
   (match mod
     [`(module ,name ,bless ,solo-inline ,blessed ,lets ,defs)
      (define all-inline (read-all-inline))

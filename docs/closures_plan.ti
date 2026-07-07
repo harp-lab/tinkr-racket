@@ -26,13 +26,15 @@ def (g fallback arg-count x y z)
 
 def (f fallback arg-count x y)
   def (g1 fallback arg-count z)
-    if (= arg-count 1)
-      (+ x y z)
-      (fail g2)
+    let g g1
+      if (= arg-count 1)
+        (+ x y z)
+        (fail g2)
   def (g2 fallback arg-count z a)
-    if (= arg-count 2)
-      (+ x y z a)
-      (fail g3)
+    let g g1
+      if (= arg-count 2)
+        (+ x y z a)
+        (fail g3)
   def (g3 fallback arg-count args_rest ...)
     (_apply none 2 g args_rest) ;; NOTE: the _apply here is not the same as the apply in closure conversion (I need to think of a better way to differentiate the two)
   
