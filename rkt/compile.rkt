@@ -5,7 +5,8 @@
 	 "compile-blessed.rkt"
 	 "build.rkt"
 	 "desugar.rkt"
-	 "simplify.rkt")
+	 "simplify.rkt"
+   "closure-convert.rkt")
 
 
 (provide compile-one) 
@@ -38,7 +39,8 @@
   (compile-step ".ti" ".ti_loaded" load-module-pass)
   (compile-step ".ti_loaded" ".core" desugar-pass)
   (compile-step ".core" ".core_alpha" alphatize-pass)
-  (compile-step ".core_alpha" ".core_limited_params" limit-def-params-pass)
+  (compile-step ".core_alpha" ".core_clo" clo-convert-pass)
+  (compile-step ".core_clo" ".core_limited_params" limit-def-params-pass)
   (compile-step ".core_limited_params" ".core_anf" anf-convert-pass)
   (compile-step ".core_anf" ".core_cps" cps-convert-pass)
   (compile-step ".core_cps" ".bl" lower-pass)
@@ -68,6 +70,11 @@
 (define (alphatize-pass src-path)
   (define mod (with-input-from-file src-path read))
   (alphatize-mod mod))
+
+
+(define (clo-convert-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (clo-convert-mod mod))
 
 
 (define (limit-def-params-pass src-path)
