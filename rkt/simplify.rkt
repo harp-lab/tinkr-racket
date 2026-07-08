@@ -3,10 +3,14 @@
 (require "utils.rkt")
 (require "langs.rkt")
 
-(provide (contract-out
+(provide alphatize-mod
+         limit-def-params-in-mod
+         anf-convert-mod
+         cps-convert-mod
+         lower-mod
+         (contract-out
           [alphatize (-> sm-core-ir? sm-core-ir?)]
-          [anf-convert (-> sm-core-ir? sm-core-ir?)]
-          [simplify-module (-> any/c any/c)]))
+          [anf-convert (-> sm-core-ir? sm-core-ir?)]))
 
 
 (define global-names 0) ;; (set)
@@ -76,6 +80,33 @@
       ;; slices
       [`(|[]| ,es ...)
        `(|[]| ,@(map recur es))]
+      
+      ;; Inner defs
+      [`(def ((ref ,fx) ,args ...) ,body ,more)
+        ;; Env containing fx (needed for body-env and more's env)
+        (define fx+ (gensymb fx))
+        (define env+ (hash-set env fx fx+))
+
+        ;; Construct an env for the body
+        (define-values (body-env args+)
+          (for/fold ([body-env env+]
+                     [args+ (list)])
+                    ([arg (in-list args)])
+            (match arg
+              [`(ref ,x)
+                (define x+ (gensymb x))
+                (values
+                  (hash-set body-env x x+)
+                  (append args+ (list `(ref ,(escape-id-for-C x+)))))]
+              [`(,ell (ref ,x)) #:when (eq? ell '|...|)
+                (define x+ (gensymb x))
+                (values
+                  (hash-set body-env x x+)
+                  (append args+ (list `(,ell (ref ,(escape-id-for-C x+))))))])))
+        
+        `(def ((ref ,(escape-id-for-C fx+)) ,@args+)
+          ,(alphatize+ body body-env)
+          ,(alphatize+ more env+))]
 
       ;; Untagged application
       [`((ref ,fx) ,es ...) (map recur ast)]
@@ -89,6 +120,7 @@
 
     ;; Alphatize defs (w/ param alpha-renaming)
     [`(def ((ref ,fx) ,args ...) ,body)
+     ;; TODO: refactor to use the same code as the inner def case
      (define env (hash))
      (define args+
        (for/list ([arg (in-list args)])
@@ -481,8 +513,63 @@
     [_ (pretty-print ast) (error 'cps-convert-err)]))
 
 
-(define (simplify-module mod) 
+(define (alphatize-mod mod)
+  (set! global-names (set 'v_equal
+                          '_u_0003d)) ; Unicode name for =
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (set! reserved-bl-x
+      (set-union reserved-bl-x
+        (for/set ([(ast) (in-list inline)])
+          (match ast [`(blessed ((ref ,fx) . ,_) ,_) fx]))))
 
+     (define defs+
+        (for/list ([ast defs]) 
+          (alphatize ast)))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,(for/list ([ast lets]) (alphatize ast))
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (limit-def-params-in-mod mod)
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (define defs+
+        (for/list ([ast defs]) 
+          (limit-def-params ast)))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,lets
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (anf-convert-mod mod)
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (define defs+
+        (for/list ([ast defs]) 
+          (anf-convert ast)))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,(for/list ([ast lets]) (anf-convert ast))
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (cps-convert-mod mod)
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (define defs+
+       (foldr append '() ;; flatten (CPS may emit >1 def for each def)
+	      (for/list ([ast defs]) 
+          (cps-convert ast))))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,lets
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (lower-mod mod)
   (define (lower-stmt ast [return-var #f]) 
     (define (recur ast) (lower-stmt ast return-var))
     ;; Flattens CPS code into basic-blocks of blessed 
@@ -614,25 +701,11 @@
     (match ast
       [`(def ((ref ,fx) ,args ...) ,body)
         `(blessed ((ref ,fx) ,@args) ((ref |{}|) ,@(lower-stmt body)))]))
-  
-  (set! global-names (set 'v_equal
-                          '_u_0003d)) ; Unicode name for =
+
   (match mod
     [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
-     (set! reserved-bl-x
-      (set-union reserved-bl-x
-        (for/set ([(ast) (in-list inline)])
-          (match ast [`(blessed ((ref ,fx) . ,_) ,_) fx]))))
-
-     (define defs+	 ;; Simplify core code: Alpha -> ANF -> CPS 
-       (foldr append '() ;; flatten (CPS may emit >1 def for each def)
-	      (for/list ([ast defs]) 
-          (cps-convert (anf-convert (limit-def-params (alphatize ast)))))))
-
      ;; Use helpers just above to lower these defs to blessed code
-     `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs+) blessed)
-	      ,(for/list ([ast lets]) (anf-convert (alphatize ast)))
-	      ,defs+
+     `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs) blessed)
+	      ,lets
+	      ,defs
 	      ,methods ,types)]))
-
-

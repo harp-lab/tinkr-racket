@@ -37,7 +37,11 @@
    
   (compile-step ".ti" ".ti_loaded" load-module-pass)
   (compile-step ".ti_loaded" ".core" desugar-pass)
-  (compile-step ".core" ".bl" simplify-lower-pass)
+  (compile-step ".core" ".core_alpha" alphatize-pass)
+  (compile-step ".core_alpha" ".core_limited_params" limit-def-params-pass)
+  (compile-step ".core_limited_params" ".core_anf" anf-convert-pass)
+  (compile-step ".core_anf" ".core_cps" cps-convert-pass)
+  (compile-step ".core_cps" ".bl" lower-pass)
   (compile-step ".bl" ".cpp" compile-bl-pass)
   (compile-step ".bl" ".h" compile-bl-decls-pass)
   
@@ -48,6 +52,7 @@
 
 (define (load-module-pass src-path)
   (load-module src-path))
+
 
 (define (desugar-pass src-path)
   ;;(define mod (load-module src-path))
@@ -60,9 +65,29 @@
 	       ,blessed ,lets ,defs))]))
 
 
-(define (simplify-lower-pass src-path)
+(define (alphatize-pass src-path)
   (define mod (with-input-from-file src-path read))
-  (simplify-module mod))
+  (alphatize-mod mod))
+
+
+(define (limit-def-params-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (limit-def-params-in-mod mod))
+
+
+(define (anf-convert-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (anf-convert-mod mod))
+
+
+(define (cps-convert-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (cps-convert-mod mod))
+
+
+(define (lower-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (lower-mod mod))
 
 
 (define (compile-bl-decls-pass src-path)
@@ -74,10 +99,3 @@
   (define mod (with-input-from-file src-path read))
   (define comp-bless (compile-blessed mod))
   comp-bless)
-
-
-
-
-
-
-

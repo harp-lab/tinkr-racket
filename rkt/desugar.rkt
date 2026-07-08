@@ -623,7 +623,7 @@
       [`(bless ,es ...) `(bless ,@es)]
       
       ;; Inner def
-      [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more)
+      [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more) ;; TODO: enforce that maybe-when is only of size 0-1
         (desugar-inner-def ast)]
 
       ;; Untagged application
@@ -663,8 +663,10 @@
 
   ;; AST -> AST
   (define (desugar-inner-def def-ast)
+    ;; Unnest the nested sibling defs
     (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
 
+    ;; Group defs by their name
     (define defs-by-name
       (for/fold ([defs-by-name (hash)])
                 ([def defs])
@@ -673,6 +675,8 @@
             (define def-group (hash-ref defs-by-name x '()))
             (hash-set defs-by-name x (append def-group (list def)))])))
 
+    ;; Desugar and link the defs in each group
+    ;; def-renamings maps the first def's new name to the original name
     (define-values (def-groups def-renamings)
       (for/fold ([def-groups (list)]
                  [def-renamings (hash)])
@@ -691,6 +695,7 @@
                                   (list (desugar-one-def new-def-x next-def-x def)))
                           next-def-x)])))
 
+        ;; Insert a last def which falls back to try the outer scope
         (define args-rest-x (gensymb 'args_rest))
         (define last-def+
           `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
@@ -702,15 +707,21 @@
             def-groups)
           (hash-set def-renamings first-def-name def-name))))
 
+    ;; These lets are to ensure that the inner defs shadow any outer defs
+    ;; (They will end up being removed during alphatization)
     (define (add-renaming-lets body)
       (for/fold ([body body])
                 ([(first-def-name main-name) (in-hash def-renamings)])
         `(let (ref ,main-name) (ref ,first-def-name)
             ,body)))
 
+    ;; Flatten the groups into a list and add the renaming lets
     (define all-defs
       (for/fold ([all-defs (list)])
                 ([def-group def-groups])
+        
+        ;; Add the renaming lets to all the defs except the last one
+        ;; (since the last def should refer to the outer scope)
         (define new-defs
           (append
             (for/list ([def (drop-right def-group 1)])
@@ -722,7 +733,7 @@
         
         (append new-defs all-defs)))
 
-    ;; Splices the defs back together with `rest-ast` at the center
+    ;; Splices/nests the defs back together with `rest-ast` at the center
     (for/fold ([inner-ast (add-renaming-lets (desugar-ast rest-ast))])
               ([def (reverse all-defs)])
       (match def
