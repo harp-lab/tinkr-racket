@@ -1,5 +1,7 @@
 #lang racket
 
+(require "utils.rkt")
+
 (provide clo-convert-mod)
 
 ;; AlphatizedModule -> CloModule
@@ -70,7 +72,7 @@
       (define-values (t-expr t-defs t-free) (clo-convert-ast e))
 
       (values
-        `(if ,g-expr ,t-expr ,e-expr)
+        `(if ,g-expr ,e-expr ,t-expr)
         (set-union g-defs e-defs t-defs)
         (set-union g-free e-free t-free))]
 
@@ -144,22 +146,67 @@
   (define def (first defs))
 
   (match def
-    [`(def ((ref ,fx) (ref ,xs) ...) ,body)
+    [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body)
       (define-values (body-expr body-new-defs body-free) (clo-convert-ast body))
 
       (define-values (rest-expr rest-new-defs rest-free) (clo-convert-ast rest-ast))
 
-      ;; TODO: change to an apply def
-      (define new-def
-        `(def ((ref ,fx) ,@(map (lambda (x) `(ref ,x)) xs)) ,body-expr))
+      (define clo-object-tag (gensymb 'clo))
+      (define apply-x (gensymb 'apply))
+      (define clo-x (gensymb 'clo))
+      (define clo-slice-x (gensymb 'clo_slice))
 
-      (define new-def-free
-        (set-subtract body-free (list->set xs)))
+      (define xs
+        (set-union
+             (set
+              fallback-x
+              arg-count-x)
+             (list->set
+              (match params
+                [`((ref ,xs) ...) xs]))))
+
+      (define new-def-free-vars
+        (set->list
+          (set-subtract body-free xs)))
+
+      (define new-def-body
+        `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
+                                  (ref ,clo-object-tag)))
+            (fail (ref ,apply-x)) ;; TODO: fail correctly
+            (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
+              ,(unpack-clo clo-slice-x new-def-free-vars body-expr))))
+
+      (define new-def
+        `(def ((ref ,apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
+
+      ;; Closure object
+      (define make-clo
+        `(object
+           (ref ,clo-object-tag)
+           ,@(map (lambda (x) `(ref ,x)) new-def-free-vars)))
+      
+      (define final-expr
+        `(let (ref ,fx) ,make-clo
+            ,rest-expr))
 
       (values
-          rest-expr ;; TODO: make closure object here
+          final-expr
           (set-union (set-add body-new-defs new-def) rest-new-defs)
-          (set-union new-def-free rest-free))]))
+          (set-union (list->set new-def-free-vars) rest-free))]))
+
+;; Symbol (ListOf Symbol) Expr -> Expr
+(define (unpack-clo clo-slice-x xs body)
+  (match xs
+    ['() body]
+    [`(,a)
+      `(let (ref ,a) ((ref _first) (ref _none) (bless (const 1)) (ref ,clo-slice-x))
+          ,body)]
+    [`(,a . ,b)
+      (define clo-slice-rest-x (gensymb 'clo_rest))
+
+      `(let (ref ,a) ((ref _first) (ref _none) (bless (const 1)) (ref ,clo-slice-x))
+        (let (ref ,clo-slice-rest-x) ((ref _rest) (ref _none) (bless (const 1)) (ref ,clo-slice-x))
+          ,(unpack-clo clo-slice-rest-x b body)))]))
 
 ;; Expr -> (ValuesOf (ListOf Expr) Expr)
 (define (get-sibling-inner-defs def-ast)
