@@ -4,8 +4,23 @@
 
 (provide clo-convert-mod)
 
+(define method-map (hash))
+(define (register-method! name obj name+)
+  (set! method-map (hash-set method-map (cons name obj) name+)))
+
+(define types-st (set))
+(define (register-type! tag)
+  (set! types-st (set-add types-st tag))
+  tag)
+
+(define apply-x '__apply__)
+(define escaped-apply-x (escape-id-for-C apply-x))
+
 ;; AlphatizedModule -> CloModule
 (define (clo-convert-mod mod)
+  (set! method-map (hash))
+  (set! types-st (set))
+
   (match mod
     [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
      (define defs+
@@ -13,8 +28,16 @@
         (for/list ([ast defs]) 
           (clo-convert ast))))
 
+     (define all-methods (append
+                          methods
+                          (hash->list method-map)))
+
+     (define all-types (append
+                        types
+                        (set->list types-st)))
+
      `(module ,name ,mtag ,bless ,inline ,blessed
-	      ,lets ,defs+ ,methods ,types)]))
+	      ,lets ,defs+ ,all-methods ,all-types)]))
 
 ;; Expr -> (ListOf Expr)
 (define (clo-convert def-ast)
@@ -117,13 +140,13 @@
       (clo-convert-inner-def ast)]
 
     ;; Untagged application
-    [`((ref ,fx) ,es ...)
+    [`((ref ,fx) ,fallback ,arg-count ,es ...)
       (define-values (fx-expr fx-defs fx-free) (clo-convert-ast `(ref ,fx)))
       (define-values (new-es es-defs es-free)
         (for/foldr ([new-es (list)]
                     [defs (set)]
                     [free (set)])
-                    ([e es])
+                   ([e es])
           (define-values (new-e e-defs e-free) (clo-convert-ast e))
 
           (values
@@ -131,8 +154,17 @@
             (set-union defs e-defs)
             (set-union free e-free))))
 
+      (define app-expr
+        (match fallback
+          [`(ref _none)
+            `((ref ,escaped-apply-x) (ref _none) (bless (const ,(+ 1 (length new-es)))) ,fx-expr ,@new-es)]
+          [_
+            ;; If passing something other than none, then it must be a regular function
+            ;; TODO: is this case ever hit?
+            `(,fx-expr ,fallback ,arg-count ,@new-es)]))
+
       (values
-        `(,fx-expr ,@new-es)
+        app-expr
         (set-union fx-defs es-defs)
         (set-union fx-free es-free))]))
 
@@ -152,7 +184,9 @@
       (define-values (rest-expr rest-new-defs rest-free) (clo-convert-ast rest-ast))
 
       (define clo-object-tag (gensymb 'clo))
-      (define apply-x (gensymb 'apply))
+      (define escaped-clo-object-tag (escape-id-for-C clo-object-tag))
+      (define new-apply-x (gensymb apply-x))
+      (define escaped-new-apply-x (escape-id-for-C new-apply-x))
       (define clo-x (gensymb 'clo))
       (define clo-slice-x (gensymb 'clo_slice))
 
@@ -171,23 +205,28 @@
 
       (define new-def-body
         `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
-                                  (ref ,clo-object-tag)))
-            (fail (ref ,apply-x)) ;; TODO: fail correctly
+                                  (ref ,escaped-clo-object-tag)))
+            (fail (ref ,escaped-new-apply-x)) ;; TODO: fail correctly
             (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
               ,(unpack-clo clo-slice-x new-def-free-vars body-expr))))
 
       (define new-def
-        `(def ((ref ,apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
+        `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
 
       ;; Closure object
       (define make-clo
         `(object
-           (ref ,clo-object-tag)
+           (ref ,escaped-clo-object-tag)
            ,@(map (lambda (x) `(ref ,x)) new-def-free-vars)))
       
       (define final-expr
         `(let (ref ,fx) ,make-clo
             ,rest-expr))
+
+      ;; Use unescaped names when registering (they are escaped later on)
+      ;; TODO: maybe refactor to do all the id escaping in alphatize instead of doing some of it in link.rkt
+      (register-type! clo-object-tag)
+      (register-method! apply-x clo-object-tag new-apply-x)
 
       (values
           final-expr
