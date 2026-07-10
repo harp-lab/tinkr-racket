@@ -174,64 +174,74 @@
   ;; Unnest the nested sibling defs
   (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
 
-  ;; Assume only one def for now (TODO: handle more than one def)
-  (define def (first defs))
+  (define-values (rest-expr rest-new-defs rest-free) (clo-convert-ast rest-ast))
 
-  (match def
-    [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body)
-      (define-values (body-expr body-new-defs body-free) (clo-convert-ast body))
+  (define-values (closure-bindings new-defs free-vars)
+    (for/fold ([closure-bindings (list)]
+               [new-defs rest-new-defs]
+               [free-vars rest-free])
+              ([def defs])
+      (match def
+        [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body) ;; TODO: Refactor params pattern to get both refs and names
+          (define-values (body-expr body-new-defs body-free) (clo-convert-ast body))
 
-      (define-values (rest-expr rest-new-defs rest-free) (clo-convert-ast rest-ast))
+          (define clo-object-tag (gensymb 'clo))
+          (define escaped-clo-object-tag (escape-id-for-C clo-object-tag))
+          (define new-apply-x (gensymb apply-x))
+          (define escaped-new-apply-x (escape-id-for-C new-apply-x))
+          (define clo-x (gensymb 'clo))
+          (define clo-slice-x (gensymb 'clo_slice))
 
-      (define clo-object-tag (gensymb 'clo))
-      (define escaped-clo-object-tag (escape-id-for-C clo-object-tag))
-      (define new-apply-x (gensymb apply-x))
-      (define escaped-new-apply-x (escape-id-for-C new-apply-x))
-      (define clo-x (gensymb 'clo))
-      (define clo-slice-x (gensymb 'clo_slice))
+          (define xs
+            (set-union
+                (set
+                  fallback-x
+                  arg-count-x)
+                (list->set
+                  (for/list ([param params])
+                    (match param
+                      [`(ref ,x) x]
+                      [`(|...| (ref ,x)) x])))))
 
-      (define xs
-        (set-union
-             (set
-              fallback-x
-              arg-count-x)
-             (list->set
-              (match params
-                [`((ref ,xs) ...) xs]))))
+          (define new-def-free-vars
+            (set->list
+              (set-subtract body-free xs)))
 
-      (define new-def-free-vars
-        (set->list
-          (set-subtract body-free xs)))
+          (define new-def-body
+            `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
+                                      (ref ,escaped-clo-object-tag)))
+                (fail (ref ,escaped-new-apply-x)) ;; TODO: fail correctly
+                (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
+                  ,(unpack-clo clo-slice-x new-def-free-vars body-expr))))
 
-      (define new-def-body
-        `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
-                                  (ref ,escaped-clo-object-tag)))
-            (fail (ref ,escaped-new-apply-x)) ;; TODO: fail correctly
-            (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
-              ,(unpack-clo clo-slice-x new-def-free-vars body-expr))))
+          (define new-def
+            `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
 
-      (define new-def
-        `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
+          ;; Closure object
+          (define make-clo
+            `(object
+              (ref ,escaped-clo-object-tag)
+              ,@(map (lambda (x) `(ref ,x)) new-def-free-vars)))
+          
+          #;(define final-expr
+            `(let (ref ,fx) ,make-clo
+                ,expr))
 
-      ;; Closure object
-      (define make-clo
-        `(object
-           (ref ,escaped-clo-object-tag)
-           ,@(map (lambda (x) `(ref ,x)) new-def-free-vars)))
-      
-      (define final-expr
-        `(let (ref ,fx) ,make-clo
-            ,rest-expr))
+          ;; Use unescaped names when registering (they are escaped later on)
+          ;; TODO: maybe refactor to do all the id escaping in alphatize instead of doing some of it in link.rkt
+          (register-type! clo-object-tag)
+          (register-method! apply-x clo-object-tag new-apply-x)
 
-      ;; Use unescaped names when registering (they are escaped later on)
-      ;; TODO: maybe refactor to do all the id escaping in alphatize instead of doing some of it in link.rkt
-      (register-type! clo-object-tag)
-      (register-method! apply-x clo-object-tag new-apply-x)
-
-      (values
-          final-expr
-          (set-union (set-add body-new-defs new-def) rest-new-defs)
-          (set-union (list->set new-def-free-vars) rest-free))]))
+          (values
+              (cons `((ref ,fx) ,make-clo) closure-bindings)
+              (set-union (set-add body-new-defs new-def) new-defs)
+              (set-union (list->set new-def-free-vars) free-vars))])))
+  
+  (values
+    `(closures (,closure-bindings)
+       ,rest-expr)
+    new-defs
+    free-vars))
 
 ;; Symbol (ListOf Symbol) Expr -> Expr
 (define (unpack-clo clo-slice-x xs body)

@@ -330,6 +330,9 @@
       [`(fail ,fail-ref)
        `(,fail-ref ,@all-sig-params)]
 
+      [`(closures ,bindings ,body)
+        `(closures ,bindings ,(recur body))]
+
       [`(,ef ,eas ...)
        (define eas+ (map recur eas))
        (define ef+ (recur ef))
