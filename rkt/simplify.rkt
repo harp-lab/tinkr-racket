@@ -83,30 +83,7 @@
       
       ;; Inner defs
       [`(def ((ref ,fx) ,args ...) ,body ,more)
-        ;; Env containing fx (needed for body-env and more's env)
-        (define fx+ (gensymb fx))
-        (define env+ (hash-set env fx fx+))
-
-        ;; Construct an env for the body
-        (define-values (body-env args+)
-          (for/fold ([body-env env+]
-                     [args+ (list)])
-                    ([arg (in-list args)])
-            (match arg
-              [`(ref ,x)
-                (define x+ (gensymb x))
-                (values
-                  (hash-set body-env x x+)
-                  (append args+ (list `(ref ,(escape-id-for-C x+)))))]
-              [`(,ell (ref ,x)) #:when (eq? ell '|...|)
-                (define x+ (gensymb x))
-                (values
-                  (hash-set body-env x x+)
-                  (append args+ (list `(,ell (ref ,(escape-id-for-C x+))))))])))
-        
-        `(def ((ref ,(escape-id-for-C fx+)) ,@args+)
-          ,(alphatize+ body body-env)
-          ,(alphatize+ more env+))]
+        (alphatize-inner-def ast env)]
 
       ;; Untagged application
       [`((ref ,fx) ,es ...) (map recur ast)]
@@ -114,6 +91,77 @@
       [_ (pretty-print ast)
         (error 'alphatize-error)]))
   
+  ;; Expr -> (ValuesOf (ListOf Expr) Expr)
+  (define (get-sibling-inner-defs def-ast)
+    (match def-ast
+      [`(def ((ref ,fx) ,params ...) ,body ,more)
+        (define-values (defs rest) (get-sibling-inner-defs more))
+
+        (values
+          (append
+            (list `(def ((ref ,fx) ,@params) ,body))
+            defs)
+          rest)]
+      
+      [_ 
+        (values
+          '()
+          def-ast)]))
+
+  ;; Expr (HashOf Symbol Symbol) -> Expr
+  (define (alphatize-inner-def def-ast env)
+    ;; Unnest the nested sibling defs
+    (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
+
+    ;; Construct an env with all the sibling defs' new names
+    (define-values (new-defs env+)
+      (for/fold ([new-defs (list)]
+                 [env+ env])
+                ([def (reverse defs)])
+        (match def
+          [`(def ((ref ,fx) ,params ...) ,body)
+            (define fx+ (gensymb fx))
+            (define env++ (hash-set env+ fx fx+))
+            
+            (values
+              (cons
+                `(def ((ref ,(escape-id-for-C fx+)) ,@params)
+                  ,body)
+                new-defs)
+              env++)])))
+    
+    ;; Alphatize each defs body with env+
+    (define final-defs
+      (for/list ([def new-defs])
+        (match def
+          [`(def ((ref ,fx) ,params ...) ,body)
+            ;; Construct an env for the body
+            (define-values (body-env params+)
+              (for/fold ([body-env env+]
+                         [params+ (list)])
+                        ([param (in-list params)])
+                (match param
+                  [`(ref ,x)
+                    (define x+ (gensymb x))
+                    (values
+                      (hash-set body-env x x+)
+                      (append params+ (list `(ref ,(escape-id-for-C x+)))))]
+                  [`(,ell (ref ,x)) #:when (eq? ell '|...|)
+                    (define x+ (gensymb x))
+                    (values
+                      (hash-set body-env x x+)
+                      (append params+ (list `(,ell (ref ,(escape-id-for-C x+))))))])))
+            
+            `(def ((ref ,fx) ,@params+)
+              ,(alphatize+ body body-env))])))
+
+    ;; Splices/nests the defs back together with `rest-ast` at the center
+    (for/fold ([inner-ast (alphatize+ rest-ast env+)])
+              ([def (reverse final-defs)])
+      (match def
+        [`(def ((ref ,fx) ,params ...) ,body)
+          `(def ((ref ,fx) ,@params) ,body ,inner-ast)])))
+
   (match ast
     [`(let ,lhs ,rhs)
      `(let ,(alphatize+ lhs) ,(alphatize+ rhs))]

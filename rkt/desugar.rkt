@@ -647,12 +647,12 @@
   ;; AST -> (ValuesOf (ListOf AST) AST)
   (define (get-sibling-inner-defs def-ast)
     (match def-ast
-      [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more)
+      [`(def ((ref ,fx) ,args ...) ,maybe-when ... ,body ,more)
         (define-values (defs rest) (get-sibling-inner-defs more))
 
         (values
           (append
-            (list `(def ((ref ,x) ,@args) ,@maybe-when ,body))
+            (list `(def ((ref ,fx) ,@args) ,@maybe-when ,body))
             defs)
           rest)]
       
@@ -737,8 +737,8 @@
     (for/fold ([inner-ast (add-renaming-lets (desugar-ast rest-ast))])
               ([def (reverse all-defs)])
       (match def
-        [`(def ((ref ,x) ,params ...) ,maybe-when ... ,body)
-          `(def ((ref ,x) ,@params) ,@maybe-when ,body ,inner-ast)])))
+        [`(def ((ref ,fx) ,params ...) ,maybe-when ... ,body)
+          `(def ((ref ,fx) ,@params) ,@maybe-when ,body ,inner-ast)])))
 
   ;; returns an obj tag if its an obj pat, or #f if not
   (define (object-method-pat? pat [qd 0])
