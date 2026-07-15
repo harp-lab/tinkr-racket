@@ -28,6 +28,18 @@
         (for/list ([ast defs]) 
           (clo-convert ast))))
 
+     ;; Generate __apply__ for function pointers
+     (define fun-ptr-x (gensymb 'fun_ptr))
+     (define args-x (gensymb 'args))
+     (define apply-fun-ptr-x (gensymb 'apply_fun_ptr))
+
+     (define apply-fun-ptr-def
+      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,(gensymb 'arg_count)) (ref ,fun-ptr-x) (... (ref ,args-x)))
+        ((ref _apply_on_slice) (ref ,fun-ptr-x) (ref ,args-x))))
+    
+     (register-method! apply-x #f apply-fun-ptr-x)
+
+
      (define all-methods (append
                           methods
                           (hash->list method-map)))
@@ -37,7 +49,7 @@
                         (set->list types-st)))
 
      `(module ,name ,mtag ,bless ,inline ,blessed
-	      ,lets ,defs+ ,all-methods ,all-types)]))
+	      ,lets ,(cons apply-fun-ptr-def defs+) ,all-methods ,all-types)]))
 
 ;; Expr -> (ListOf Expr)
 (define (clo-convert def-ast)
@@ -157,7 +169,7 @@
       (define app-expr
         (match fallback
           [`(ref _none)
-            `((ref ,escaped-apply-x) (ref _none) (bless (const ,(+ 1 (length new-es)))) ,fx-expr ,@new-es)]
+            `((ref ,escaped-apply-x) (ref _none) (bless (const ,(length new-es))) ,fx-expr ,@new-es)] ;; The arg count here is for applying fx (so it is only the length of new-es)
           [_
             ;; If passing something other than none, then it must be a regular function
             ;; TODO: is this case ever hit?
@@ -210,9 +222,11 @@
           (define new-def-body
             `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
                                       (ref ,escaped-clo-object-tag)))
-                (fail (ref ,escaped-new-apply-x)) ;; TODO: fail correctly
                 (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
-                  ,(unpack-clo clo-slice-x new-def-free-vars body-expr))))
+                  ,(unpack-clo clo-slice-x new-def-free-vars body-expr))
+                
+                ;; TODO: fail correctly
+                (fail (ref ,escaped-new-apply-x))))
 
           (define new-def
             `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
@@ -238,7 +252,7 @@
               (set-union (list->set new-def-free-vars) free-vars))])))
   
   (values
-    `(closures (,closure-bindings)
+    `(closures ,closure-bindings
        ,rest-expr)
     new-defs
     free-vars))
@@ -273,3 +287,8 @@
       (values
         '()
         def-ast)]))
+
+(define (with-print-value val-ast ast)
+  `(let (ref ,(gensymb '_))
+        (bless ((ref print_debug_value) ,val-ast))
+        ,ast))

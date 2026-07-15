@@ -93,6 +93,69 @@ def (_apply f args)
   
   (raw_apply f a0 a1 a2 a3 a4 r4)
 
+;; FunPtr Slice ->
+blessed (_apply_on_slice f args)
+{
+  ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
+  if (bl_slice_empty args)
+  {
+    do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)0, (any)0, (any)0, (any)0, (any)0, (any)0, (any)0)" f)
+    return 0
+  }
+  {
+    a0 = (bl_slice_first args)
+    r0 = (bl_slice_rest args)
+    if (bl_slice_empty r0)
+    {
+      do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)1, (any)$1, (any)0, (any)0, (any)0, (any)0, (any)0)" f a0)
+      return 0
+    }
+    {
+      a1 = (bl_slice_first r0)
+      r1 = (bl_slice_rest r0)
+      if (bl_slice_empty r1)
+      {
+        do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)2, (any)$1, (any)$2, (any)0, (any)0, (any)0, (any)0)" f a0 a1)
+        return 0
+      }
+      {
+        a2 = (bl_slice_first r1)
+        r2 = (bl_slice_rest r1)
+        if (bl_slice_empty r2)
+        {
+          do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)3, (any)$1, (any)$2, (any)$3, (any)0, (any)0, (any)0)" f a0 a1 a2)
+          return 0
+        }
+        {
+          a3 = (bl_slice_first r2)
+          r3 = (bl_slice_rest r2)
+          if (bl_slice_empty r3)
+          {
+            do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)4, (any)$1, (any)$2, (any)$3, (any)$4, (any)0, (any)0)" f a0 a1 a2 a3)
+            return 0
+          }
+          {
+            a4 = (bl_slice_first r3)
+            r4 = (bl_slice_rest r3)
+            if (bl_slice_empty r4)
+            {
+              do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)5, (any)$1, (any)$2, (any)$3, (any)$4, (any)$5, (any)0)" f a0 a1 a2 a3 a4)
+              return 0
+            }
+            {
+              r4_ptr = (anys_t (top61 r4))
+              r4_length = (_slice_len r4_ptr)
+
+              do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)((u64)5 + (u64)$1), $2, $3, $4, $5, $6, $7)" f r4_length a0 a1 a2 a3 a4 r4)
+              return 0
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 ;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
 blessed (_raw__apply f a0 a1 a2 a3 a4 r4)
 {

@@ -141,6 +141,14 @@ blessed (alloc_attempt x n)
   (seq_2 (assign x alloc_fr) 
          (assign alloc_fr (many_t (plus (manys_t alloc_fr) n))))
 
+;; Slices
+blessed (bl_slice_first s) (deref (anys_t (top61 s)))
+blessed (bl_slice_rest s) (plus (anys_t (top61 s)) 1) ;; Note: this removes the slice's tag without retagging
+
+blessed (bl_slice_empty s)
+  (u64bit_or (eq s _empty)
+             (u64bit_or (eq 0 (bl_slice_first s)) (eq 255 (u64bit_and 255 (bl_slice_first s)))))
+
 
 ;; C calls of length 0 - 13
 blessed (call_0 cname) ("$0()" cname)

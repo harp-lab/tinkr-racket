@@ -75,15 +75,14 @@ def (g3 fallback arg-count clo args_rest ...)
   (_apply none 2 g args_rest)
 
 def (f fallback arg-count x y)
-  let g1 `[clo1 ,g ,g2 ,x ,y] ;; desugar this statement
-
-  ;; if g1 is recursive then will need to create a recursive closure (similarly if we have mutually recursive inner-defs)
-  
-  {
-    (debug_print none 1 (write none 1 (apply none 1 g1 3)))
-    (debug_print none 1 (write none 1 (apply none 2 g1 3 4)))
-    (debug_print none 1 (write none 1 (apply none 3 g1 3 4 5)))
-  }
+  ;; If g1 is recursive then will need to create a recursive closure (similarly if we have mutually recursive inner-defs)
+  ;; This new closures form allows the creation of recursive closures.
+  (closures ((g1 (object clo1 g g2 x y)))
+    {
+      (debug_print none 1 (write none 1 (apply none 1 g1 3)))
+      (debug_print none 1 (write none 1 (apply none 2 g1 3 4)))
+      (debug_print none 1 (write none 1 (apply none 3 g1 3 4 5)))
+    })
 
 def (apply_fun_ptr fallback arg-count func args ...)
   ;; In order to prevent this from going into an infinite loop (since _apply will currently make a call to apply_fun_ptr once compiled), I will need
@@ -120,13 +119,7 @@ def (g3 fallback arg-count clo args_rest_gather1 args_rest_gather2 args_rest_gat
     (_apply none 2 g args_rest)
 
 def (f fallback arg-count x y pad1 pad2 pad3 pad4)
-  ;; let g1 `[clo1 ,g ,g2 ,x ,y]
-  
-  {
-    (debug_print none 1 (write none 1 (apply none 1 g1 3)))
-    (debug_print none 1 (write none 1 (apply none 2 g1 3 4)))
-    (debug_print none 1 (write none 1 (apply none 3 g1 3 4 5)))
-  }
+  ;; ...
 
 def (apply_fun_ptr fallback arg-count func args_gather1 args_gather2 args_gather3 args_gather4 args_rest)
   let args (gather fallback 6 args_gather1 args_gather2 args_gather3 args_gather4 _noarg [args_rest])
@@ -134,5 +127,8 @@ def (apply_fun_ptr fallback arg-count func args_gather1 args_gather2 args_gather
 
 ;; ANF
 ;; CPS
-;; Blessed
+;; Blessed:
+
+;; Lowering the closures here.
+
 ;; ...

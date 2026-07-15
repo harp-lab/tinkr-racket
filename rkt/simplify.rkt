@@ -328,7 +328,7 @@
        `(continue-dispatch ,@(map recur eas))]
 
       [`(fail ,fail-ref)
-       `(,fail-ref ,@all-sig-params)]
+       `((ref _u____apply____) ,fail-ref ,@all-sig-params)] ;; TODO
 
       [`(closures ,bindings ,body)
         `(closures ,bindings ,(recur body))]
@@ -359,7 +359,7 @@
   (define all-sig-params (append (list `(ref ,fallback-x) `(ref ,arg-count-x)) new-sig-params extra-params))
 
   `(def ((ref ,fname) ,@all-sig-params)
-    ,(body-binder (translate-call-sites body all-sig-params))))
+    ,(body-binder (translate-call-sites body (append new-sig-params extra-params)))))
 
 
 
@@ -368,9 +368,11 @@
 ;; Normalizes some simple forms into blessed code and junctures with blessed code
 (define (anf-convert ast)
   
+  ;; Expr -> Expr
   (define (normalize-term ast)
     (normalize ast (λ (x) x)))
 
+  ;; Expr Lambda -> Expr
   (define (normalize ast k)
     (match ast
       [`(ref ,x) (k `(ref ,x))]
@@ -411,6 +413,11 @@
                         (λ (xs)
                           (k `(continue-dispatch ,@xs))))]
 
+      [`(closures (,bindings ...) ,body) ;; Keep these bindings as they are
+        (k 
+          `(closures (,@bindings)
+              ,(normalize-term body)))]
+
       [`(,eas ...)
        (normalize-names eas
                         (λ (xs)
@@ -418,6 +425,9 @@
 
       [_ (error 'normalize-err)]))
 
+  ;; Expr Lambda -> Expr
+  ;; Normalizes the expression to a name which
+  ;; is passed to the kont lambda specifying what to do next.
   (define (normalize-name e0 k)
     (match e0
       [`(,_ ...)
@@ -426,10 +436,14 @@
                     (match e0+
                       [`(ref ,_) (k e0+)]
                       [`(const ,_) (k e0+)]
-		      [`(,ell (ref ,_)) #:when (eq? ell '|...|) (k e0+)]
-                      [_ (let ([tx `(ref ,(gensymb 't))])
+		                  [`(,ell (ref ,_)) #:when (eq? ell '|...|) (k e0+)]
+                      [_
+                        (let ([tx `(ref ,(gensymb 't))])
                            `(let ,tx ,e0+ ,(k tx)))])))]))
 
+  ;; (ListOf Expr) Lambda -> Expr
+  ;; Normalizes the expressions to a list of names
+  ;; which is passed to the kont lambda specifying what to do next.
   (define (normalize-names es k)
     (if (null? es)
         (k '())
@@ -485,7 +499,7 @@
           [`(bless ,e0) (freebless e0)]
           [`(let ,lhs ,rhs ,body)
             (set-union (freevars rhs)
-                  (set-subtract (freevars body) (freevars lhs)))]
+                       (set-subtract (freevars body) (freevars lhs)))]
           [`(,es ...)
             (foldl set-union (set) (map freevars es))]
           [_ (set)]))
@@ -494,17 +508,18 @@
 		    (set 'unbox_subword 'get_subword_tag)))
 
     (define (lift-cont! x body type rhs)
-      
       (define freelst (set->list (set-remove (free body) x)))
       (define kname (gensymb (sym-append defname type)))
+
       (lift-def! ;; assumes def interface w/ dummy fallback
        `(def ((ref ,kname) (ref ,(gensymb '_)) (ref ,(gensymb '_)) (ref ,x))
-	     ,(foldl
-         (lambda (free-x body+)
-		       `(let (ref ,free-x) (bless ((ref stack_pop)))
-			     ,body+))
-		     (recur body)
-		     freelst)))
+          ,(foldl
+            (lambda (free-x body+)
+              `(let (ref ,free-x) (bless ((ref stack_pop)))
+              ,body+))
+            (recur body)
+            freelst)))
+
       (foldr
         (lambda (free-x body+)
 	       `(let (ref ,(gensymb '_))
@@ -542,7 +557,12 @@
 
       [`(if ,guard ,then ,else) 
        `(if ,guard ,(recur then) ,(recur else))]
+      
       [`(continue-dispatch ,_ ...) ast] 
+
+      [`(closures (,bindings ...) ,body)
+        `(closures (,@bindings)
+          ,(recur body))]
 
       [`((ref ,fx) ,args ...)
        `((ref ,fx) ,@args)]
@@ -623,37 +643,41 @@
 (define (lower-mod mod)
   (define (lower-stmt ast [return-var #f]) 
     (define (recur ast) (lower-stmt ast return-var))
+
     ;; Flattens CPS code into basic-blocks of blessed 
     (match ast
 
       ;; Assignment to fresh immutable var
       [`(let (ref ,x) (bless ,rhs) ,body)
        `(((ref =) (ref ,x) ,rhs)
-	 ,@(recur body))]
+	       ,@(recur body))]
 
+      ;; Let bound const or ref
       [`(let (ref ,x) ,(and rhs (or `(const ,_) `(ref ,_))) ,body)
        `(((ref =) (ref ,x) ,rhs)
-	 ,@(recur body))]
+	       ,@(recur body))]
 
+      ;; Let bound subword
       [`(let (ref ,x) (subword (ref ,tag) ,e0) ,body)
        `(((ref =) (ref ,x)
-	  ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
-	 ,@(recur body))]
+	                ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
+	       ,@(recur body))]
 
+      ;; Let bound object
       [`(let (ref ,x) (object (ref ,tag) ,es ...) ,body)
        (define rx (gensymb 'a))
        `(((ref =) ((ref |!|) (ref ,rx))
-	  ((ref alloc) (const ,(+ 1 (length es)))))
-	 (do ((ref init_obj) (ref ,rx) (const 0)
-	      ((ref obj_head_word)
-	       (const ,(length es))
-	       (ref ,(sym-append tag "_vtable")))))
-	 ,@(map (lambda (ae i)
-		  `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
-		es
-		(range 1 (add1 (length es))))
-	 ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
-	 ,@(recur body))]
+	                ((ref alloc) (const ,(+ 1 (length es)))))
+	       (do ((ref init_obj) (ref ,rx) (const 0)
+                             ((ref obj_head_word)
+                              (const ,(length es))
+                              (ref ,(sym-append tag "_vtable")))))
+	       ,@(map (lambda (ae i)
+		              `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
+		            es
+		            (range 1 (add1 (length es))))
+	       ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
+	       ,@(recur body))]
 
       ;; Lower List/Slice Literals
       [`(let (ref ,x) (|[]| ,es ...) ,body)
@@ -714,12 +738,13 @@
       [`(let (ref ,x) (if ,g ,t ,e) ,body)
        (define x+ (gensymb x)) ;; lower in-place with x+ as mut join var
        `(,@(lower-stmt `(if ,g ,t ,e) x+)
-        ((ref =) (ref ,x) ((ref freeze) (ref ,x+)))
-        ,@(recur body))]
+         ((ref =) (ref ,x) ((ref freeze) (ref ,x+)))
+         ,@(recur body))]
+      
       [`(if ,g ,t ,e)
        (define g+ (gensymb 'grd))
        `(((ref =) (ref ,g+) ((ref eq) ,g (ref _false)))
-	 (if (ref ,g+) ((ref |{}|) ,@(recur e)) ((ref |{}|) ,@(recur t))))]
+	       (if (ref ,g+) ((ref |{}|) ,@(recur e)) ((ref |{}|) ,@(recur t))))]
       
       ;; Invoke fun-ptr at fallback ptr, then increment and pass fwd
       [`(continue-dispatch ,fallback ,args ...)
@@ -730,6 +755,64 @@
        `(((ref =) (ref ,fun) ((ref deref) ((ref anys_t) ,fallback))) 
          ((ref =) (ref ,fb1) ((ref plus) ((ref manys_t) ,fallback) (const 1)))
          (return ((ref ,fun) (ref ,fb1) ,@args)))]
+
+      ;; Construct closures
+      [`(closures (((ref ,xs) ,(and objs `(object ,_ ...))) ...) ,body)
+      
+        (define-values (alloc-objects-code renamings)
+          (for/fold ([alloc-objects-code (list)]
+                     [renamings (hash)])
+                    ([x (reverse xs)]
+                     [obj (reverse objs)])
+            (match obj
+              [`(object (ref ,tag) ,fvs ...)
+                (define rx (gensymb x))
+
+                (values
+                  (cons
+                    `((ref =) ((ref |!|) (ref ,rx))
+                              ((ref alloc) (const ,(+ 1 (length fvs)))))
+                    alloc-objects-code)
+                  
+                  (hash-set renamings x rx))])))
+       
+       (define (rename-x x)
+        (hash-ref renamings x x))
+       (define (rename-ref ref)
+        (match ref
+          [`(ref ,x) `(ref ,(rename-x x))]))
+      
+       (define init-objects-code
+        (foldr append '() ;; flatten one level
+          (for/list ([x xs]
+                    [obj objs])
+            (match obj
+              [`(object (ref ,tag) ,fvs ...)
+                (define rx (rename-x x))
+                (define r-fvs (map rename-ref fvs))
+
+                ;; Head word + fvs
+                `((do ((ref init_obj) (ref ,rx) (const 0)
+                                      ((ref obj_head_word)
+                                      (const ,(length r-fvs))
+                                      (ref ,(sym-append tag "_vtable")))))
+                  
+                  ,@(map (lambda (fv i)
+                          `(do ((ref init_obj) (ref ,rx) (const ,i) ,fv)))
+                        r-fvs
+                        (range 1 (add1 (length r-fvs)))))]))))
+
+       (define freeze-objects-code
+        (for/list ([x xs]
+                   [obj objs])
+          (define rx (rename-x x))
+          `((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))))
+
+       `(,@alloc-objects-code
+         ,@init-objects-code
+         ,@freeze-objects-code
+
+         ,@(recur body))]
 
       ;; Return to current continuation
       [`(return ,ae) #:when return-var ;; local var cont
