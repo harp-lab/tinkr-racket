@@ -465,7 +465,7 @@
        (define-values (sig-params arity has-unsplice body-binder) (process-params params))
        
        ;; A special expression form (removed later on) encoding what to do if the patterns don't match: call the next def (i.e. failx)
-       (define fail-e `(fail (ref ,failx)))
+       (define fail-e `(fail))
 
        ;; Main body with pattern matching checks
        (define pattern-checks-body
@@ -490,7 +490,7 @@
        ;; Call desugar-ast on each param in the case there is a (ref ...) that needs the ref removed
        (define desguared-sig-params (map desugar-ast sig-params))
 
-       `(def ((ref ,name) (ref ,fallback-x) (ref ,arg-count-x) ,@desguared-sig-params)
+       `(def ((ref ,name) (ref ,fallback-x) (ref ,arg-count-x) ,@desguared-sig-params) (fail_to (ref ,failx))
           ,final-body)]))
   
   ;; The main desugarer
@@ -644,7 +644,7 @@
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
   
-  ;; AST -> (ValuesOf (ListOf AST) AST)
+  ;; Expr -> (ValuesOf (ListOf Expr) Expr)
   (define (get-sibling-inner-defs def-ast)
     (match def-ast
       [`(def ((ref ,fx) ,args ...) ,maybe-when ... ,body ,more)
@@ -661,7 +661,7 @@
           '()
           def-ast)]))
 
-  ;; AST -> AST
+  ;; Expr -> Expr
   (define (desugar-inner-def def-ast)
     ;; Unnest the nested sibling defs
     (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
@@ -686,7 +686,7 @@
         ;; Desugar each def
         (define-values (defs+ new-def-x)
           (for/fold ([defs+ (list)]
-                    [new-def-x first-def-name])
+                     [new-def-x first-def-name])
                     ([def defs])
             (match def
               [`(def ((ref ,x) ,_ ...) ,_ ...)
@@ -726,8 +726,8 @@
           (append
             (for/list ([def (drop-right def-group 1)])
               (match def
-                [`(def ,param-list ,maybe-when ... ,body)
-                 `(def ,param-list ,@maybe-when
+                [`(def ,param-list ,maybe-fail-to ... ,body)
+                 `(def ,param-list ,@maybe-fail-to
                     ,(add-renaming-lets body))]))
             (list (last def-group))))
         
@@ -737,8 +737,8 @@
     (for/fold ([inner-ast (add-renaming-lets (desugar-ast rest-ast))])
               ([def (reverse all-defs)])
       (match def
-        [`(def ((ref ,fx) ,params ...) ,maybe-when ... ,body)
-          `(def ((ref ,fx) ,@params) ,@maybe-when ,body ,inner-ast)])))
+        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+          `(def ((ref ,fx) ,@params) ,@maybe-fail-to ,body ,inner-ast)])))
 
   ;; returns an obj tag if its an obj pat, or #f if not
   (define (object-method-pat? pat [qd 0])

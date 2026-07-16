@@ -54,9 +54,9 @@
 ;; Expr -> (ListOf Expr)
 (define (clo-convert def-ast)
   (match def-ast
-    [`(def (,xs ...) ,body)
+    [`(def (,xs ...) ,maybe-fail-to ... ,body)
       (define-values (expr new-defs _) (clo-convert-ast body))
-      (append (list `(def (,@xs) ,expr)) (set->list new-defs))]
+      (append (list `(def (,@xs) ,@maybe-fail-to ,expr)) (set->list new-defs))]
     [_ (error 'clo-convert-defs)]))
 
 ;; Expr -> (ValuesOf Expr (SetOf Expr) (SetOf Variable))
@@ -115,9 +115,8 @@
       (recur-exprs es
                    (lambda (es) `(continue-dispatch ,@es)))]
     
-    [`(fail ,fail-ref)
-      (recur fail-ref
-             (lambda (e) `(fail ,e)))]
+    [`(fail)
+     (values `(fail) (set) (set))]
 
     [`(,ell ,e0) #:when (eq? ell '|...|)
       (define-values (expr defs free) (clo-convert-ast e0))
@@ -148,7 +147,7 @@
                    (lambda (es) `(|[]| ,@es)))]
 
     ;; Inner def
-    [`(def ((ref ,fx) ,xs ...) ,body ,more)
+    [`(def ((ref ,fx) ,xs ...) ,maybe-fail-to ... ,body ,more)
       (clo-convert-inner-def ast)]
 
     ;; Untagged application
@@ -188,58 +187,135 @@
 
   (define-values (rest-expr rest-new-defs rest-free) (clo-convert-ast rest-ast))
 
-  (define-values (closure-bindings new-defs free-vars)
-    (for/fold ([closure-bindings (list)]
-               [new-defs rest-new-defs]
-               [free-vars rest-free])
+  ;; A set of lists of def names which are linked together in a fail chain by fail_to.
+  ;; The first def in a chain is the entry point.
+  (define fail-chains
+    (for/fold ([chains (set)])
               ([def defs])
       (match def
-        [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body) ;; TODO: Refactor params pattern to get both refs and names
-          (define-values (body-expr body-new-defs body-free) (clo-convert-ast body))
+        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+          (define maybe-fail-x
+            (if (null? maybe-fail-to)
+              #f
+              (match maybe-fail-to
+                [`((fail_to (ref ,fail-x)))
+                  fail-x])))
+          
+          (cond
+            ;; Add the fail-x to an existing or new chain
+            [maybe-fail-x
+              (define-values (updated-chains updated)
+                (for/fold ([updated-chains (set)]
+                           [updated #f])
+                          ([chain chains])
+
+                  (if (equal? (last chain) fx)
+                      (values
+                        (set-add updated-chains (append chain (list maybe-fail-x))) ;; Extend existing chain
+                        #t)
+                      (values
+                        (set-add updated-chains chain)
+                        updated))))
+              
+              (if updated
+                  updated-chains
+                  (set-add chains (list fx maybe-fail-x)))] ;; Start new chain
+            
+            ;; This def's name (i.e. fx) will have already been added to a chain
+            [else chains])])))
+
+  (define (get-def-with-name fx)
+    (define (def-name-maches? def)
+      (match def
+        [`(def ((ref ,gx) ,_ ...) ,_ ... ,_) (equal? fx gx)]))
+
+    (for/first ([def defs]
+                #:when (def-name-maches? def))
+      def))
+
+  (struct def-group
+    [defs        ;; (ListOf Expr)
+     free-vars]  ;; (SetOf Variable)
+    #:transparent)
+
+  ;; Closure convert def bodies and find free vars for each def group
+  (define-values (def-groups lifted-defs-from-bodies)
+    (for/fold ([def-groups (set)]
+               [new-defs (set)])
+              ([chain fail-chains])
+      (define-values (def-g more-new-defs)
+        (for/fold ([curr-def-group (def-group (list) (set))]
+                  [new-defs (set)])
+                  ([def-name chain])
+
+          (define def (get-def-with-name def-name))
+          
+          (match def
+            [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,(and params (or `(ref ,xs)
+                                                                                    `(|...| (ref ,xs)))) ...) ,maybe-fail-to ...
+                ,body)
+
+              (define-values (body-expr body-new-defs body-free) (clo-convert-ast body))
+
+              (define def-free-vars
+                (set->list
+                  (set-subtract body-free (list->set xs))))
+
+              (define def+
+                `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,@maybe-fail-to ,body-expr))
+
+              (values
+                (def-group (append (def-group-defs curr-def-group) (list def+))
+                           (set-union (list->set def-free-vars) (def-group-free-vars curr-def-group)))
+                (set-union body-new-defs new-defs))])))
+      
+      (values
+        (set-add def-groups def-g)
+        (set-union new-defs more-new-defs))))
+
+  (define (is-first-def-in-group? group def)
+    (equal? def
+            (first (def-group-defs group))))
+
+  ;; Fully closure convert defs: each def that is first in its group becomes an __apply__
+  ;; and passes around a closure for the entire group.
+  (define-values (closure-bindings lifted-defs free-vars)
+    (for*/fold ([closure-bindings (list)]
+                [lifted-defs (set)]
+                [free-vars (set)])
+               ([curr-def-group def-groups]
+                #:do [(define group-free-vars (set->list (def-group-free-vars curr-def-group)))] ;; pick an arbitrary ordering for the free vars to put into the closure
+                [def (def-group-defs curr-def-group)])
+
+      (define clo-x (gensymb 'clo))
+      (define clo-slice-x (gensymb 'clo_slice))
+
+      (match def
+        ;; First def in group: convert to an __apply__
+        [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,maybe-fail-to ... ,body)
+          #:when (is-first-def-in-group? curr-def-group def)
 
           (define clo-object-tag (gensymb 'clo))
           (define escaped-clo-object-tag (escape-id-for-C clo-object-tag))
           (define new-apply-x (gensymb apply-x))
           (define escaped-new-apply-x (escape-id-for-C new-apply-x))
-          (define clo-x (gensymb 'clo))
-          (define clo-slice-x (gensymb 'clo_slice))
-
-          (define xs
-            (set-union
-                (set
-                  fallback-x
-                  arg-count-x)
-                (list->set
-                  (for/list ([param params])
-                    (match param
-                      [`(ref ,x) x]
-                      [`(|...| (ref ,x)) x])))))
-
-          (define new-def-free-vars
-            (set->list
-              (set-subtract body-free xs)))
 
           (define new-def-body
             `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
                                       (ref ,escaped-clo-object-tag)))
                 (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
-                  ,(unpack-clo clo-slice-x new-def-free-vars body-expr))
+                  ,(unpack-clo clo-slice-x group-free-vars body))
                 
-                ;; TODO: fail correctly
-                (fail (ref ,escaped-new-apply-x))))
+                (fail))) ;; TODO: do we need this check and fail?
 
-          (define new-def
-            `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,new-def-body))
+          (define new-lifted-def
+            `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,@maybe-fail-to ,new-def-body))
 
           ;; Closure object
           (define make-clo
             `(object
               (ref ,escaped-clo-object-tag)
-              ,@(map (lambda (x) `(ref ,x)) new-def-free-vars)))
-          
-          #;(define final-expr
-            `(let (ref ,fx) ,make-clo
-                ,expr))
+              ,@(map (lambda (x) `(ref ,x)) group-free-vars)))
 
           ;; Use unescaped names when registering (they are escaped later on)
           ;; TODO: maybe refactor to do all the id escaping in alphatize instead of doing some of it in link.rkt
@@ -248,14 +324,29 @@
 
           (values
               (cons `((ref ,fx) ,make-clo) closure-bindings)
-              (set-union (set-add body-new-defs new-def) new-defs)
-              (set-union (list->set new-def-free-vars) free-vars))])))
-  
+              (set-add lifted-defs new-lifted-def)
+              (set-union (list->set group-free-vars) free-vars))]
+
+        ;; Not first def in group
+        [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,maybe-fail-to ... ,body)
+
+          (define new-def-body
+            `(let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
+                  ,(unpack-clo clo-slice-x group-free-vars body)))
+
+          (define new-lifted-def
+            `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,@maybe-fail-to ,new-def-body))
+
+          (values
+              closure-bindings
+              (set-add lifted-defs new-lifted-def)
+              (set-union (list->set group-free-vars) free-vars))])))
+
   (values
     `(closures ,closure-bindings
        ,rest-expr)
-    new-defs
-    free-vars))
+    (set-union lifted-defs lifted-defs-from-bodies rest-new-defs)
+    (set-union free-vars rest-free)))
 
 ;; Symbol (ListOf Symbol) Expr -> Expr
 (define (unpack-clo clo-slice-x xs body)
@@ -274,12 +365,12 @@
 ;; Expr -> (ValuesOf (ListOf Expr) Expr)
 (define (get-sibling-inner-defs def-ast)
   (match def-ast
-    [`(def ((ref ,x) ,args ...) ,body ,more)
+    [`(def ((ref ,x) ,args ...) ,maybe-fail-to ... ,body ,more)
       (define-values (defs rest) (get-sibling-inner-defs more))
 
       (values
         (append
-          (list `(def ((ref ,x) ,@args) ,body))
+          (list `(def ((ref ,x) ,@args) ,@maybe-fail-to ,body))
           defs)
         rest)]
     

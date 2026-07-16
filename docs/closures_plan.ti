@@ -25,16 +25,16 @@ def (g fallback arg-count x y z)
     ;; fail
 
 def (f fallback arg-count x y)
-  def (g1 fallback arg-count z)
+  def (g1 fallback arg-count z) (fail_to g2)
     let g g1
       if (= arg-count 1)
         (+ x y z)
-        (fail g2)
-  def (g2 fallback arg-count z a)
+        (fail)
+  def (g2 fallback arg-count z a) (fail_to g3)
     let g g1
       if (= arg-count 2)
         (+ x y z a)
-        (fail g3)
+        (fail)
   def (g3 fallback arg-count args_rest ...)
     (_apply none 2 g args_rest) ;; NOTE: the _apply here is not the same as the apply in closure conversion (I need to think of a better way to differentiate the two)
   
@@ -59,17 +59,17 @@ def (g fallback arg-count x y z)
     ;; (+ x y z)
     ;; fail
 
-def (apply1 fallback arg-count clo z)
+def (apply1 fallback arg-count clo z) (fail_to g2)
   ;; unpack clo
     if (= arg-count 1)
       ;; (+ x y z)
-      (fail g2)
+      (fail)
 
-def (g2 fallback arg-count clo z a)
+def (g2 fallback arg-count clo z a) (fail_to g3)
   ;; unpack clo
     if (= arg-count 2)
       ;; (+ x y z a)
-      (fail g3)
+      (fail)
 
 def (g3 fallback arg-count clo args_rest ...)
   (_apply none 2 g args_rest)
@@ -101,13 +101,13 @@ def (g fallback arg-count x y z pad1 pad2 pad3)
     ;; (+ x y z)
     ;; fail
 
-def (apply1 fallback arg-count clo z pad1 pad2 pad3 pad4)
+def (apply1 fallback arg-count clo z pad1 pad2 pad3 pad4) (fail_to g2)
   ;; unpack clo
     if (= arg-count 1)
       ;; (+ x y z)
       (g2 fallback arg-count clo z pad1 pad2 pad3 pad4)
 
-def (g2 fallback arg-count clo z a pad1 pad2 pad3)
+def (g2 fallback arg-count clo z a pad1 pad2 pad3) (fail_to g3)
   ;; unpack clo
     if (= arg-count 2)
       ;; (+ x y z a)

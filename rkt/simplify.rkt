@@ -58,8 +58,11 @@
       [`(continue-dispatch ,es ...)
        `(continue-dispatch ,@(map recur es))]
 
-      [`(fail ,fail-ref)
-       `(fail ,(recur fail-ref))]
+      [`(fail)
+       `(fail)]
+
+      [`(fail_to ,fail-ref)
+       `(fail_to ,(recur fail-ref))]
 
       [`(,ell ,e0) #:when (eq? ell '|...|)
        `(,ell ,(recur e0))]
@@ -82,7 +85,7 @@
        `(|[]| ,@(map recur es))]
       
       ;; Inner defs
-      [`(def ((ref ,fx) ,args ...) ,body ,more)
+      [`(def ((ref ,fx) ,args ...) ,maybe-fail-to ... ,body ,more)
         (alphatize-inner-def ast env)]
 
       ;; Untagged application
@@ -94,12 +97,12 @@
   ;; Expr -> (ValuesOf (ListOf Expr) Expr)
   (define (get-sibling-inner-defs def-ast)
     (match def-ast
-      [`(def ((ref ,fx) ,params ...) ,body ,more)
+      [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body ,more)
         (define-values (defs rest) (get-sibling-inner-defs more))
 
         (values
           (append
-            (list `(def ((ref ,fx) ,@params) ,body))
+            (list `(def ((ref ,fx) ,@params) ,@maybe-fail-to ,body))
             defs)
           rest)]
       
@@ -119,13 +122,13 @@
                  [env+ env])
                 ([def (reverse defs)])
         (match def
-          [`(def ((ref ,fx) ,params ...) ,body)
+          [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
             (define fx+ (gensymb fx))
             (define env++ (hash-set env+ fx fx+))
             
             (values
               (cons
-                `(def ((ref ,(escape-id-for-C fx+)) ,@params)
+                `(def ((ref ,(escape-id-for-C fx+)) ,@params) ,@maybe-fail-to
                   ,body)
                 new-defs)
               env++)])))
@@ -134,7 +137,7 @@
     (define final-defs
       (for/list ([def new-defs])
         (match def
-          [`(def ((ref ,fx) ,params ...) ,body)
+          [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
             ;; Construct an env for the body
             (define-values (body-env params+)
               (for/fold ([body-env env+]
@@ -152,22 +155,27 @@
                       (hash-set body-env x x+)
                       (append params+ (list `(,ell (ref ,(escape-id-for-C x+))))))])))
             
-            `(def ((ref ,fx) ,@params+)
+            (define alphatized-maybe-fail-to
+              (if (null? maybe-fail-to)
+                   '()
+                   (list (alphatize+ (car maybe-fail-to) env+))))
+
+            `(def ((ref ,fx) ,@params+) ,@alphatized-maybe-fail-to
               ,(alphatize+ body body-env))])))
 
     ;; Splices/nests the defs back together with `rest-ast` at the center
     (for/fold ([inner-ast (alphatize+ rest-ast env+)])
               ([def (reverse final-defs)])
       (match def
-        [`(def ((ref ,fx) ,params ...) ,body)
-          `(def ((ref ,fx) ,@params) ,body ,inner-ast)])))
+        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+          `(def ((ref ,fx) ,@params) ,@maybe-fail-to ,body ,inner-ast)])))
 
   (match ast
     [`(let ,lhs ,rhs)
      `(let ,(alphatize+ lhs) ,(alphatize+ rhs))]
 
     ;; Alphatize defs (w/ param alpha-renaming)
-    [`(def ((ref ,fx) ,args ...) ,body)
+    [`(def ((ref ,fx) ,args ...) ,maybe-fail-to ... ,body)
      ;; TODO: refactor to use the same code as the inner def case
      (define env (hash))
      (define args+
@@ -181,7 +189,13 @@
             (define x+ (gensymb x))
             (set! env (hash-set env x x+))
             `(,ell (ref ,(escape-id-for-C x+)))])))
-     `(def ((ref ,(escape-id-for-C fx)) ,@args+)
+
+     (define alphatized-maybe-fail-to
+             (if (null? maybe-fail-to)
+                  '()
+                  (list (alphatize+ (car maybe-fail-to)))))
+     
+     `(def ((ref ,(escape-id-for-C fx)) ,@args+) ,@alphatized-maybe-fail-to
         ,(alphatize+ body env))]
 
     [_ (pretty-print ast)
@@ -210,7 +224,14 @@
   (define noarg-x '_u__noarg)
   (define standard-arg-count (- bless-arg-count 3)) ;; Number of blessed args not including the overflow slice or fallback or arg-count
   
-  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body) ast)
+  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,maybe-fail-to ... ,body) ast)
+
+  (define maybe-fail-x
+    (if (null? maybe-fail-to)
+      #f
+      (match maybe-fail-to
+        [`((fail_to (ref ,fail-x)))
+          fail-x])))
 
   ;; (ListOf Expr) Int (or Symbol #f) -> (ValuesOf (ListOf Symbol) Lambda)
   ;; Processes def param list to cap the number of params.
@@ -327,8 +348,11 @@
       [`(continue-dispatch ,eas ...)
        `(continue-dispatch ,@(map recur eas))]
 
-      [`(fail ,fail-ref)
-       `((ref _u____apply____) ,fail-ref ,@all-sig-params)] ;; TODO
+      [`(fail)
+       (when (not maybe-fail-x)
+         (error 'limit-def-params "Fail expressions (fail) must be inside an enclosing def with a (fail_to (ref failx)) annotation."))
+
+       `((ref ,maybe-fail-x) ,@all-sig-params)]
 
       [`(closures ,bindings ,body)
         `(closures ,bindings ,(recur body))]
@@ -359,7 +383,7 @@
   (define all-sig-params (append (list `(ref ,fallback-x) `(ref ,arg-count-x)) new-sig-params extra-params))
 
   `(def ((ref ,fname) ,@all-sig-params)
-    ,(body-binder (translate-call-sites body (append new-sig-params extra-params)))))
+    ,(body-binder (translate-call-sites body all-sig-params))))
 
 
 
