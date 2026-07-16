@@ -804,7 +804,12 @@
         (hash-ref renamings x x))
        (define (rename-ref ref)
         (match ref
-          [`(ref ,x) `(ref ,(rename-x x))]))
+          [`(ref ,x)
+           (if (hash-has-key? renamings x)
+               ;; x must be a closure: rename, freeze, and tag
+               ;; TODO: do we need to freeze here?
+               `((ref u64bit_or) ((ref freeze) (ref ,(rename-x x))) (const 1))
+               `(ref ,x))]))
       
        (define init-objects-code
         (foldr append '() ;; flatten one level

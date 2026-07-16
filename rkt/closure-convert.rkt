@@ -141,7 +141,7 @@
         (set-union rhs-defs body-defs)
         (set-union rhs-free (set-remove body-free x)))]
 
-    ;; slices
+    ;; Slices
     [`(|[]| ,es ...)
       (recur-exprs es
                    (lambda (es) `(|[]| ,@es)))]
@@ -166,13 +166,16 @@
             (set-union free e-free))))
 
       (define app-expr
-        (match fallback
-          [`(ref _none)
-            `((ref ,escaped-apply-x) (ref _none) (bless (const ,(length new-es))) ,fx-expr ,@new-es)] ;; The arg count here is for applying fx (so it is only the length of new-es)
-          [_
-            ;; If passing something other than none, then it must be a regular function
-            ;; TODO: is this case ever hit?
-            `(,fx-expr ,fallback ,arg-count ,@new-es)]))
+        (if (equal? fx '_u__init__from__s64) ;; TODO: this is a temporary fix, do this for all global symbols
+          `(,fx-expr ,fallback ,arg-count ,@new-es)
+
+          (match fallback
+            [`(ref _none)
+              `((ref ,escaped-apply-x) (ref _none) (bless (const ,(length new-es))) ,fx-expr ,@new-es)] ;; The arg count here is for applying fx (so it is only the length of new-es)
+            [_
+              ;; If passing something other than none, then it must be a regular function
+              ;; TODO: is this case ever hit?
+              `(,fx-expr ,fallback ,arg-count ,@new-es)])))
 
       (values
         app-expr
