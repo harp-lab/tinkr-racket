@@ -8,6 +8,11 @@
          anf-convert-mod
          cps-convert-mod
          lower-mod
+
+         ;; TODO: we probably shouldn't export these
+         global-names
+         reserved-bl-x
+
          (contract-out
           [alphatize (-> sm-core-ir? sm-core-ir?)]
           [anf-convert (-> sm-core-ir? sm-core-ir?)]))

@@ -1,6 +1,7 @@
 #lang racket
 
-(require "utils.rkt")
+(require "utils.rkt"
+         "simplify.rkt")
 
 (provide clo-convert-mod)
 
@@ -102,7 +103,18 @@
     [`(const ,_) (values ast (set) (set))]
     
     ;; Bless
-    [`(bless ,e0) (values ast (set) (set))] ;; TODO: handle bless
+    [`(bless ,e0)
+      (define (freebless ast)
+        (match ast
+          [`(ref ,x) (set x)]
+          [`((ref ,fx) ,aes ...) ;; do not count fun-expr
+            (foldl set-union (set) (map freebless aes))]
+          [_ (set)]))
+
+      (values
+        ast
+        (set)
+        (freebless e0))]
 
     ;; Simple recursion
     [`(if ,g ,t ,e)
@@ -170,16 +182,12 @@
             (set-union free e-free))))
 
       (define app-expr
-        (if #f ;; TODO: this is a temporary fix, do this for all global symbols
+        (if (set-member? global-names fx)
+          ;; In this case, we statically know that fx must be a fun ptr and not a closure
           `(,fx-expr ,fallback ,arg-count ,@new-es)
 
-          (match fallback
-            [`(ref _none)
-              `((ref ,escaped-apply-x) (ref _none) (bless (const ,(length new-es))) ,fx-expr ,@new-es)] ;; The arg count here is for applying fx (so it is only the length of new-es)
-            [_
-              ;; If passing something other than none, then it must be a regular function
-              ;; TODO: is this case ever hit?
-              `(,fx-expr ,fallback ,arg-count ,@new-es)])))
+          ;; The arg count here is for applying fx (so it is only the length of new-es)
+          `((ref ,escaped-apply-x) (ref _none) (bless (const ,(length new-es))) ,fx-expr ,@new-es)))
 
       (values
         app-expr
@@ -264,9 +272,10 @@
 
               (define-values (body-expr body-new-defs body-free) (clo-convert-ast body))
 
+              (define xs-to-remove (set-union (set fallback-x arg-count-x) (list->set xs) global-names reserved-bl-x))
               (define def-free-vars
                 (set->list
-                  (set-subtract body-free (list->set xs))))
+                  (set-subtract body-free xs-to-remove)))
 
               (define def+
                 `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,@maybe-fail-to ,body-expr))
@@ -308,12 +317,8 @@
           (define escaped-new-apply-x (escape-id-for-C new-apply-x))
 
           (define new-def-body
-            `(if (bless ((ref equal) ((ref get_object_tag) (ref ,clo-x))
-                                      (ref ,escaped-clo-object-tag)))
-                (let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
-                  ,(unpack-clo clo-slice-x group-free-vars body))
-                
-                (fail))) ;; TODO: do we need this check and fail?
+            `(let (ref ,clo-slice-x) (bless ((ref get_object_slice) (ref ,clo-x)))
+                ,(unpack-clo clo-slice-x group-free-vars body)))
 
           (define new-lifted-def
             `(def ((ref ,escaped-new-apply-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,clo-x) ,@params) ,@maybe-fail-to ,new-def-body))
