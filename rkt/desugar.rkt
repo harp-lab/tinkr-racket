@@ -213,7 +213,7 @@
 
       ;; Normal loop call:
       [else
-        `((ref ,f-x) (ref ,fallback-x) ,@(map desugar-ast params))]))
+        `((ref ,f-x) (ref ,fallback-x) (bless (const ,(length params))) ,@(map desugar-ast params))]))
 
   ;; `(ref ,Symbol) (ListOf Patterns) DesugaredExpr (or Symbol #f) (ListOf UndesugaredExpr) DesugaredExpr Int -> DesugaredExpr
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`) which should be a slice
@@ -270,7 +270,7 @@
 
         ;; TODO: need inner defs to make nested ... work
         (define loop-def
-          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
+          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params) (fail_to (ref ,fail-x))
             (if ((ref is_empty) (ref none) (bless (const 1)) (ref ,x-slice))
               ,body
 
@@ -464,7 +464,7 @@
        ;; sig-params are the param names that will be matched on
        (define-values (sig-params arity has-unsplice body-binder) (process-params params))
        
-       ;; A special expression form (removed later on) encoding what to do if the patterns don't match: call the next def (i.e. failx)
+       ;; A special expression form (removed later on) that tells a later pass that we need to fail here
        (define fail-e `(fail))
 
        ;; Main body with pattern matching checks
