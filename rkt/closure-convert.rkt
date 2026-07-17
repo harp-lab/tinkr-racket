@@ -30,12 +30,16 @@
 
      ;; Generate __apply__ for function pointers
      (define fun-ptr-x (gensymb 'fun_ptr))
-     (define args-x (gensymb 'args))
+     (define arg-count-x (gensymb 'arg_count))
+     (define rest-args-x (gensymb 'args))
      (define apply-fun-ptr-x (gensymb 'apply_fun_ptr))
 
+     ;; so-far is 4 since we already have the fallback, arg count, fun ptr, and overflow splice args
+     (define arg-xs (pad-params 4))
+
      (define apply-fun-ptr-def
-      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,(gensymb 'arg_count)) (ref ,fun-ptr-x) (... (ref ,args-x)))
-        ((ref _apply_on_slice) (ref ,fun-ptr-x) (ref ,args-x))))
+      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,arg-count-x) (ref ,fun-ptr-x) ,@arg-xs (... (ref ,rest-args-x)))
+        ((ref _apply_on_slice) (ref ,fun-ptr-x) (ref ,arg-count-x) ,@arg-xs (ref ,rest-args-x))))
     
      (register-method! apply-x #f apply-fun-ptr-x)
 
@@ -166,7 +170,7 @@
             (set-union free e-free))))
 
       (define app-expr
-        (if (equal? fx '_u__init__from__s64) ;; TODO: this is a temporary fix, do this for all global symbols
+        (if #f ;; TODO: this is a temporary fix, do this for all global symbols
           `(,fx-expr ,fallback ,arg-count ,@new-es)
 
           (match fallback

@@ -1,12 +1,12 @@
 
 def (g x y z)
-  (+ (+ x y) z)
+  (+ x y z)
 
 def (f x y)
   def (g z)
-    (+ (+ x y) z)
+    (+ x y z)
   def (g z a)
-    (+ (+ (+ x y) z) a)
+    (+ x y z a)
   
   {
     (debug_print (write (g 3)))     ;; 6

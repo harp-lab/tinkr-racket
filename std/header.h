@@ -56,9 +56,12 @@ typedef void* __restrict__ many;
     #define DBG(x) ATOMIC_PRINT(x)
     #define DBG_VALUE(x) \
       x << " (tag: " << ((u64)x & (u64)7) << ", " << DEBUG_TAG_MAP.at((u64)x & (u64)7) << ")"
+    // Assuming any is 64 bits
+    #define DBG_VALUE_BASE10(x) ((u64)x)
 #else // Or no-op
     #define DBG(x) do {} while(0)
     #define DBG_VALUE(x) ""
+    #define DBG_VALUE_BASE10(x) ""
 #endif
 
 

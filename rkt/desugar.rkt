@@ -510,15 +510,15 @@
        (desugar-ast e0 (- qd 1))]
 
       ;; Lift constants out (fixint sized integers)
+      ;; first none is for the fallback as this is an external call
+      ;; second none here is idiom to avoid dispatch on naked values
+      ;; the second argument is the arg count
       [`(const ,(? integer? z))
        #:when (< (- 0 (expt 2 48)) z (expt 2 48))
-       ;; first none is for the fallback as this is an external call
        `((ref _init_from_s64) (ref none) (bless (const 2)) (ref none) (bless (const ,z)))]
       [`(const ,(? integer? z))
-       ;; first none is for the fallback as this is an external call
        `((ref _init_from_int_cstr) (ref none) (bless (const 2)) (ref none) (bless (const ,(~s (~a z)))))]
       [`(const ,(? string? s))
-       ;; second none here is idiom to avoid dispatch on naked values
        `((ref _init_from_cstr) (ref none) (bless (const 2)) (ref none) (bless (const ,(~s s))))]
       
       ;; Quoted sub-word values
