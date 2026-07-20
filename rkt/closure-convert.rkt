@@ -260,7 +260,7 @@
               ([chain fail-chains])
       (define-values (def-g more-new-defs)
         (for/fold ([curr-def-group (def-group (list) (set))]
-                  [new-defs (set)])
+                   [new-defs (set)])
                   ([def-name chain])
 
           (define def (get-def-with-name def-name))
@@ -354,11 +354,17 @@
               (set-add lifted-defs new-lifted-def)
               (set-union (list->set group-free-vars) free-vars))])))
 
+  (define def-names
+    (for/set ([def defs])
+      (match def
+        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+          fx])))
+
   (values
     `(closures ,closure-bindings
        ,rest-expr)
     (set-union lifted-defs lifted-defs-from-bodies rest-new-defs)
-    (set-union free-vars rest-free)))
+    (set-subtract (set-union free-vars rest-free) def-names)))
 
 ;; Symbol (ListOf Symbol) Expr -> Expr
 (define (unpack-clo clo-slice-x xs body)

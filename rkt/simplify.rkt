@@ -529,6 +529,11 @@
           [`(let ,lhs ,rhs ,body)
             (set-union (freevars rhs)
                        (set-subtract (freevars body) (freevars lhs)))]
+          [`(closures ((,xs ,rhss) ...) ,body)
+           (set-subtract
+            (set-union (foldl set-union (set) (map freevars rhss))
+                        (freevars body))
+            (foldl set-union (set) (map freevars xs)))]
           [`(,es ...)
             (foldl set-union (set) (map freevars es))]
           [_ (set)]))
