@@ -140,6 +140,7 @@ must_inline any freeze(many v)
 extern reg_passing AVXRet _u_0003d(many, many, many, any, any, any, any, any, any, any, any);
 extern const void* _true;
 extern const void* _false; 
+extern const void* _u__noarg; 
 must_inline reg_passing AVXRet v_equal(
     many alloc_fr, many alloc_bk, many stack_fr, any fbk,
     any a0, any a1, any a2, any a3, any a4, any a5, any a6)
@@ -149,7 +150,7 @@ must_inline reg_passing AVXRet v_equal(
   { // Short circuit with _true 
     many* s = (many*)stack_fr;
     blessed_t cont = (blessed_t)s[-1];
-    tailcall cont(alloc_fr, alloc_bk, (many)(s - 1), 0, (any)1, _true, 0, 0, 0, 0, 0);
+    tailcall cont(alloc_fr, alloc_bk, (many)(s - 1), 0, (any)1, _true, _u__noarg, _u__noarg, _u__noarg, _u__noarg, _u__noarg);
   }
   else // Dispatch to = method
     tailcall _u_0003d(alloc_fr, alloc_bk, stack_fr, 0, a0, a1, a2, a3, a4, a5, a6);
