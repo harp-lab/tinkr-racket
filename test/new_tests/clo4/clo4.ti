@@ -1,0 +1,36 @@
+
+;; ... patterns don't currently work yet
+
+def (f) "error"
+def (is_5) "error"
+def (two_5) "error"
+def (all_5 x) "error"
+
+def (main)
+  let a 5
+  
+  def (f ,a) "value is 5"
+  def (f a) a
+
+  def (is_5 5) true
+  def (is_5 x) false
+
+  def (two_5 (? x is_5) (? y is_5)) true
+  def (two_5 x y) false
+
+  ;;def (all_5 (? x is_5) ...) true
+  ;;def (all_5 x ...) false
+
+  {
+    (debug_print (write (f 5)))
+    (debug_print (write (f 6)))
+
+    (debug_print (write (is_5 5)))
+    (debug_print (write (is_5 6)))
+
+    (debug_print (write (two_5 5 5)))
+    (debug_print (write (two_5 5 6)))
+
+    ;;(debug_print (write (all_5 5 5 5 5 5 5)))
+    ;;(debug_print (write (all_5 5 5 5 6 5 5)))
+  }

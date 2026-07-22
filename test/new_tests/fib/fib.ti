@@ -6,6 +6,6 @@ def (fib 1) 1
 def (fib n) (fib n-1) + (fib n-2)
 
 
-def (main) (fib 10)
+def (main) (debug_print (write (fib 10)))
 
 
