@@ -111,8 +111,7 @@
                (format "  AVXRet r = vtable_lookup(~a,a1,(any)(u64)~a_pos,0,0,0,0,0,0);\n"
                    std-arg
                    method+)
-               (format "  tailcall ~a(~a,~a_link,~a);\n"
-                   "((blessed_t)r.a0())"
+               (format "  tailcall any_to_blessed(r.a0())(~a,~a_link,~a);\n"
                    std-arg
                    method+
                    o-arg))))
@@ -183,17 +182,17 @@
      (format "reg_passing AVXRet entry_point_init(~a,~a)\n{\n AVXRet r;\n~a~a~a~a}\n"
          "many alloc_fr, many alloc_bk, many stack_fr"
          "any a0, any a1, any a2, any a3, any a4, any a5, any a6, any a7"
-         " ((many*)stack_fr)[0] = (many)(blessed_t)_main_shim;\n"  ;; <-- PUSH SHIM HERE
+         " stack_store_blessed(stack_fr, 0, _main_shim);\n"  ;; <-- PUSH SHIM HERE
          (apply string-append
             (map (lambda (mtag i)
-               (format " ((many*)stack_fr)[~a] = (many)(blessed_t)~a;\n"
+             (format " stack_store_blessed(stack_fr, ~a, ~a);\n"
                    i
                    (format "_entry__point__~a" mtag)))
              all-method-tags
              (range 1 (add1 (length all-method-tags)))))
-         (format " stack_fr = (many)((many*)stack_fr + ~a);\n"
+         (format " stack_fr = (many)((u64*)stack_fr + ~a);\n"
              (length all-method-tags))
-         (format " tailcall ((blessed_t)*(many*)stack_fr)(~a,~a);\n"
+         (format " tailcall stack_load_blessed(stack_fr, 0)(~a,~a);\n"
              "alloc_fr,alloc_bk,stack_fr,(any)0,(any)0"
              "(any)0,(any)0,(any)0,(any)0,(any)0,(any)0"))))
   

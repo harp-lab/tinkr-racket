@@ -12,7 +12,8 @@
 (require "utils.rkt"
 	 racket/system
 	 racket/hash
-	 racket/runtime-path)
+   racket/runtime-path
+   racket/string)
 
 ;; A helper human-readable tag for the error file produced
 ;; by run-cmd. Can be set!ed before calling run-cmd.
@@ -20,6 +21,22 @@
 
 (define null-device-path
   (if (eq? (system-type) 'windows) "NUL" "/dev/null"))
+
+;; Environment flag parser.
+;; True values: 1, true, yes, on (case-insensitive)
+(define (env-enabled? name)
+  (define v (getenv name))
+  (and v
+       (member (string-downcase (string-trim v))
+               '("1" "true" "yes" "on"))))
+
+(define (build-error-log-path)
+  ;; Optional override for persistent logs (useful if /tmp/ti is cleared).
+  ;; Example: export TI_ERROR_LOG_DIR=/tmp
+  (define log-dir (or (getenv "TI_ERROR_LOG_DIR") "/tmp/ti"))
+  (unless (directory-exists? log-dir)
+    (make-directory* log-dir))
+  (build-path log-dir (format "error~a.log" error-file-tag)))
 
 
 ;; Channel to catch and bubble up thread crashes
@@ -115,7 +132,7 @@
 
 (define (run-cmd prog . args)
   (define log-port (open-output-file
-		    (build-path (format "/tmp/ti/error~a.log" error-file-tag))
+        (build-error-log-path)
 		    #:exists 'append))
   (define stdin-port (open-input-file null-device-path))
   (define-values (sp out in err)
@@ -141,19 +158,33 @@
   (spawn-safe
    (lambda ()
      (match-define `(,cxx-type ,cxx-path) (find-cxx-path))
+     ;; Diagnostic mode: set TI_SANITIZE=1 in the environment to enable
+     ;; AddressSanitizer / UBSan with optimizations enabled (-O2).
+     (define sanitize? (env-enabled? "TI_SANITIZE"))
+     (define lto? (env-enabled? "TI_LTO"))
+     (define no-strict-aliasing? (env-enabled? "TI_NO_STRICT_ALIASING"))
+     (define no-delete-null-checks? (env-enabled? "TI_NO_DELETE_NULL_CHECKS"))
+     (define compile-flags
+       (append
+         (if sanitize?
+             (list "-O2" "-fsanitize=address,undefined" "-fno-omit-frame-pointer" "-g")
+             (list (if lto? "-O2" "-O0")))
+         (if lto? (list "-flto=thin") '())
+         (if no-strict-aliasing? (list "-fno-strict-aliasing") '())
+         (if no-delete-null-checks? (list "-fno-delete-null-pointer-checks") '())
+         (list "-march=native" "-w"
+               (if (equal? cxx-type 'clang++) "-ferror-limit=3" "-fmax-errors=3"))))
+     (when (env-enabled? "TI_PRINT_CXX_FLAGS")
+       (displayln (format "CXX compile flags: ~a" compile-flags)))
      (apply run-cmd
             (append
               (list cxx-path
                 "-c" cpp-path
                 "-o" obj-path
-                "-include" header-path 
-                "-std=c++20"
-                "-g"
-                "-march=native"
-                "-w"
-                (if (equal? cxx-type 'clang++) "-ferror-limit=3" "-fmax-errors=3"))
-              (if (equal? cxx-type 'clang++) (list "-flto=thin") '())
-              (if debug                      (list "-DDEBUG")    '())))
+                "-include" header-path
+                "-std=c++20")
+              compile-flags
+              (if debug (list "-DDEBUG") '())))
      ;; Copy the .o file into the build folder using the hashed dir name
      (copy-file obj-path
         (match (explode-path obj-path)
@@ -175,13 +206,31 @@
   (when (null? obj-files)
     (error (format "No .o files found in ~a" project-path)))
   (apply run-cmd
-	 cxx-path
-	 "-lgc"
-	 "-lgmp"
-	 "-flto=thin"
-	 "-fuse-ld=lld"
-         "-o" out-path
-	 obj-files))
+         cxx-path
+     ;; Link flags. If TI_SANITIZE is set, include sanitizer runtimes and
+     ;; link at -O2 to match optimized compile and reproduce UB under
+     ;; optimizations.
+       (let ([lto? (env-enabled? "TI_LTO")]
+             [sanitize? (env-enabled? "TI_SANITIZE")]
+             [no-strict-aliasing? (env-enabled? "TI_NO_STRICT_ALIASING")]
+             [no-delete-null-checks? (env-enabled? "TI_NO_DELETE_NULL_CHECKS")])
+       (define link-flags
+         (append
+           (if sanitize?
+               (append (list "-O2" "-lgc" "-lgmp" "-fsanitize=address,undefined" "-g" "-fno-omit-frame-pointer")
+                       (if lto? (list "-flto=thin") '()))
+               (if lto?
+                   (list "-lgc" "-lgmp" "-flto=thin" "-fuse-ld=lld")
+                   (list "-lgc" "-lgmp")))
+           (if no-strict-aliasing? (list "-fno-strict-aliasing") '())
+           (if no-delete-null-checks? (list "-fno-delete-null-pointer-checks") '())
+           (list "-o" out-path)))
+       (when (env-enabled? "TI_PRINT_CXX_FLAGS")
+         (displayln (format "CXX link flags: ~a" link-flags)))
+       (if sanitize?
+         (append link-flags obj-files)
+         ;; Normal link (no sanitize): include LTO flags when requested.
+         (append link-flags obj-files)))))
 
 
 (define (link-and-build-bin project-path)

@@ -91,22 +91,22 @@ struct AVXRet
   
   must_inline any a0() const
   {
-    return (any)((uintptr_t*)&data)[0];
+    return (any)(uintptr_t)_mm256_extract_epi64(data, 0);
   }
 
   must_inline many m0() const
   {
-    return (many)((uintptr_t*)&data)[1];
+    return (many)(uintptr_t)_mm256_extract_epi64(data, 1);
   }
 
   must_inline many m1() const
   {
-    return (many)((uintptr_t*)&data)[2];
+    return (many)(uintptr_t)_mm256_extract_epi64(data, 2);
   }
   
   must_inline many m2() const
   {
-    return (many)((uintptr_t*)&data)[3];
+    return (many)(uintptr_t)_mm256_extract_epi64(data, 3);
   }
 };
 
@@ -120,6 +120,50 @@ typedef AVXRet (reg_passing *blessed_t)
     any a0, any a1, any a2, any a3, any a4, 
     any a5, any a6, any a7
 );
+
+// Safely move blessed function pointers through machine-word storage.
+// This avoids UB-prone object-pointer/function-pointer casts.
+must_inline u64 blessed_to_bits(blessed_t f)
+{
+  static_assert(sizeof(blessed_t) <= sizeof(u64));
+  u64 bits = 0;
+  memcpy(&bits, &f, sizeof(f));
+  return bits;
+}
+
+must_inline blessed_t bits_to_blessed(u64 bits)
+{
+  blessed_t f;
+  memcpy(&f, &bits, sizeof(f));
+  return f;
+}
+
+must_inline blessed_t any_to_blessed(any a)
+{
+  u64 bits = (u64)a;
+  asm volatile("" : "+r"(bits) : : "memory");
+  return bits_to_blessed(bits);
+}
+
+must_inline any blessed_to_any(blessed_t f)
+{
+  u64 bits = blessed_to_bits(f);
+  asm volatile("" : "+r"(bits) : : "memory");
+  return (any)bits;
+}
+
+must_inline void stack_store_blessed(many stack_fr, s64 idx, blessed_t f)
+{
+  u64 bits = blessed_to_bits(f);
+  volatile u64* vslot = (volatile u64*)&((u64*)stack_fr)[idx];
+  *vslot = bits;
+}
+
+must_inline blessed_t stack_load_blessed(many stack_fr, s64 idx)
+{
+  volatile u64* vslot = (volatile u64*)&((u64*)stack_fr)[idx];
+  return bits_to_blessed(*vslot);
+}
 
 
 /* Macro for inlining a soft barrier
@@ -148,9 +192,8 @@ must_inline reg_passing AVXRet v_equal(
   DBG("Checking equality of values " << a1 << ", " << a2);
   if ((u64)a1 == (u64)a2)
   { // Short circuit with _true 
-    many* s = (many*)stack_fr;
-    blessed_t cont = (blessed_t)s[-1];
-    tailcall cont(alloc_fr, alloc_bk, (many)(s - 1), 0, (any)1, _true, _u__noarg, _u__noarg, _u__noarg, _u__noarg, _u__noarg);
+    blessed_t cont = stack_load_blessed(stack_fr, -1);
+    tailcall cont(alloc_fr, alloc_bk, (many)((u64*)stack_fr - 1), 0, (any)1, _true, _u__noarg, _u__noarg, _u__noarg, _u__noarg, _u__noarg);
   }
   else // Dispatch to = method
     tailcall _u_0003d(alloc_fr, alloc_bk, stack_fr, 0, a0, a1, a2, a3, a4, a5, a6);
