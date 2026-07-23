@@ -1,7 +1,8 @@
 #lang racket
 
 (require "utils.rkt"
-         "langs.rkt")
+         "langs.rkt"
+         "helpers.rkt")
 
 (provide desugar-module)
 
@@ -644,69 +645,62 @@
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
   
-  ;; Expr -> (ValuesOf (ListOf Expr) Expr)
-  (define (get-sibling-inner-defs def-ast)
-    (match def-ast
-      [`(def ((ref ,fx) ,args ...) ,maybe-when ... ,body ,more)
-        (define-values (defs rest) (get-sibling-inner-defs more))
+  ;; (ListOf Expr) -> (HashOf Symbol (ListOf Expr))
+  ;; Partition the list of defs by their name.
+  (define (part-defs-by-name defs)
+    (for/fold ([defs-by-name (hash)])
+              ([def defs])
+      (match def
+        [`(def ((ref ,x) ,_ ...) ,_ ...)
+          (define def-group (hash-ref defs-by-name x '()))
+          (hash-set defs-by-name x (append def-group (list def)))])))
 
-        (values
-          (append
-            (list `(def ((ref ,fx) ,@args) ,@maybe-when ,body))
-            defs)
-          rest)]
-      
-      [_ 
-        (values
-          '()
-          def-ast)]))
+  ;; (HashOf Symbol (ListOf Expr)) -> (ValuesOf (ListOf (ListOf Expr)) (HashOf Symbol Symbol))
+  ;; Desugar and link the defs in each group. Returns a list of groups of defs.
+  ;; Also, returns a renaming map which maps the first def's new name to the original name.
+  (define (desugar-and-link-defs defs-by-name)
+    (for/fold ([def-groups (list)]
+               [def-renamings (hash)])
+              ([(def-name defs) (in-hash defs-by-name)])
+      (define first-def-name (gensymb def-name))
+
+      ;; Desugar each def
+      (define-values (defs+ new-def-x)
+        (for/fold ([defs+ (list)]
+                   [new-def-x first-def-name])
+                  ([def defs])
+          (match def
+            [`(def ((ref ,x) ,_ ...) ,_ ...)
+                (define next-def-x (gensymb x))
+                (values (append defs+
+                                (list (desugar-one-def new-def-x next-def-x def)))
+                        next-def-x)])))
+
+      ;; Insert a last def which falls back to try the outer scope
+      (define args-rest-x (gensymb 'args_rest))
+      (define last-def+
+        `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
+            ,(desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))))
+
+      (values
+        (cons
+          (append defs+ (list last-def+))
+          def-groups)
+        (hash-set def-renamings first-def-name def-name))))
 
   ;; Expr -> Expr
   (define (desugar-inner-def def-ast)
     ;; Unnest the nested sibling defs
-    (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
+    (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
 
     ;; Group defs by their name
-    (define defs-by-name
-      (for/fold ([defs-by-name (hash)])
-                ([def defs])
-        (match def
-          [`(def ((ref ,x) ,_ ...) ,_ ...)
-            (define def-group (hash-ref defs-by-name x '()))
-            (hash-set defs-by-name x (append def-group (list def)))])))
+    (define defs-by-name (part-defs-by-name defs))
 
     ;; Desugar and link the defs in each group
     ;; def-renamings maps the first def's new name to the original name
-    (define-values (def-groups def-renamings)
-      (for/fold ([def-groups (list)]
-                 [def-renamings (hash)])
-                ([(def-name defs) (in-hash defs-by-name)])
-        (define first-def-name (gensymb def-name))
+    (define-values (def-groups def-renamings) (desugar-and-link-defs defs-by-name))
 
-        ;; Desugar each def
-        (define-values (defs+ new-def-x)
-          (for/fold ([defs+ (list)]
-                     [new-def-x first-def-name])
-                    ([def defs])
-            (match def
-              [`(def ((ref ,x) ,_ ...) ,_ ...)
-                  (define next-def-x (gensymb x))
-                  (values (append defs+
-                                  (list (desugar-one-def new-def-x next-def-x def)))
-                          next-def-x)])))
-
-        ;; Insert a last def which falls back to try the outer scope
-        (define args-rest-x (gensymb 'args_rest))
-        (define last-def+
-          `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
-              ,(desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))))
-
-        (values
-          (cons
-            (append defs+ (list last-def+))
-            def-groups)
-          (hash-set def-renamings first-def-name def-name))))
-
+    ;; Expr -> Expr
     ;; These lets are to ensure that the inner defs shadow any outer defs
     ;; (They will end up being removed during alphatization)
     (define (add-renaming-lets body)
@@ -734,11 +728,7 @@
         (append new-defs all-defs)))
 
     ;; Splices/nests the defs back together with `rest-ast` at the center
-    (for/fold ([inner-ast (add-renaming-lets (desugar-ast rest-ast))])
-              ([def (reverse all-defs)])
-      (match def
-        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
-          `(def ((ref ,fx) ,@params) ,@maybe-fail-to ,body ,inner-ast)])))
+    (nest-sibling-defs all-defs (add-renaming-lets (desugar-ast rest-ast))))
 
   ;; returns an obj tag if its an obj pat, or #f if not
   (define (object-method-pat? pat [qd 0])

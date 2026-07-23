@@ -2,6 +2,7 @@
 
 (require "utils.rkt")
 (require "langs.rkt")
+(require "helpers.rkt")
 
 (provide alphatize-mod
          limit-def-params-in-mod
@@ -99,27 +100,10 @@
       [_ (pretty-print ast)
         (error 'alphatize-error)]))
   
-  ;; Expr -> (ValuesOf (ListOf Expr) Expr)
-  (define (get-sibling-inner-defs def-ast)
-    (match def-ast
-      [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body ,more)
-        (define-values (defs rest) (get-sibling-inner-defs more))
-
-        (values
-          (append
-            (list `(def ((ref ,fx) ,@params) ,@maybe-fail-to ,body))
-            defs)
-          rest)]
-      
-      [_ 
-        (values
-          '()
-          def-ast)]))
-
   ;; Expr (HashOf Symbol Symbol) -> Expr
   (define (alphatize-inner-def def-ast env)
     ;; Unnest the nested sibling defs
-    (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
+    (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
 
     ;; Construct an env with all the sibling defs' new names
     (define-values (new-defs env+)
@@ -144,21 +128,7 @@
         (match def
           [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
             ;; Construct an env for the body
-            (define-values (body-env params+)
-              (for/fold ([body-env env+]
-                         [params+ (list)])
-                        ([param (in-list params)])
-                (match param
-                  [`(ref ,x)
-                    (define x+ (gensymb x))
-                    (values
-                      (hash-set body-env x x+)
-                      (append params+ (list `(ref ,(escape-id-for-C x+)))))]
-                  [`(,ell (ref ,x)) #:when (eq? ell '|...|)
-                    (define x+ (gensymb x))
-                    (values
-                      (hash-set body-env x x+)
-                      (append params+ (list `(,ell (ref ,(escape-id-for-C x+))))))])))
+            (define-values (params+ body-env) (alphatize-param-list params env+))
             
             (define alphatized-maybe-fail-to
               (if (null? maybe-fail-to)
@@ -169,11 +139,24 @@
               ,(alphatize+ body body-env))])))
 
     ;; Splices/nests the defs back together with `rest-ast` at the center
-    (for/fold ([inner-ast (alphatize+ rest-ast env+)])
-              ([def (reverse final-defs)])
-      (match def
-        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
-          `(def ((ref ,fx) ,@params) ,@maybe-fail-to ,body ,inner-ast)])))
+    (nest-sibling-defs final-defs (alphatize+ rest-ast env+)))
+
+  ;; (ListOf Expr) (HashOf Symbol Symbol) -> (ValuesOf (ListOf Expr) (HashOf Symbol Symbol))
+  (define (alphatize-param-list params env)
+    (for/fold ([params+ (list)]
+               [env+ env])
+              ([param (in-list params)])
+      (match param
+        [`(ref ,x)
+          (define x+ (gensymb x))
+          (values
+            (append params+ (list `(ref ,(escape-id-for-C x+))))
+            (hash-set env+ x x+))]
+        [`(,ell (ref ,x)) #:when (eq? ell '|...|)
+          (define x+ (gensymb x))
+          (values
+            (append params+ (list `(,ell (ref ,(escape-id-for-C x+)))))
+            (hash-set env+ x x+))])))
 
   (match ast
     [`(let ,lhs ,rhs)
@@ -181,19 +164,7 @@
 
     ;; Alphatize defs (w/ param alpha-renaming)
     [`(def ((ref ,fx) ,args ...) ,maybe-fail-to ... ,body)
-     ;; TODO: refactor to use the same code as the inner def case
-     (define env (hash))
-     (define args+
-       (for/list ([arg (in-list args)])
-         (match arg
-           [`(ref ,x)
-            (define x+ (gensymb x))
-            (set! env (hash-set env x x+))
-            `(ref ,(escape-id-for-C x+))]
-           [`(,ell (ref ,x)) #:when (eq? ell '|...|)
-            (define x+ (gensymb x))
-            (set! env (hash-set env x x+))
-            `(,ell (ref ,(escape-id-for-C x+)))])))
+     (define-values (args+ env) (alphatize-param-list args (hash)))
 
      (define alphatized-maybe-fail-to
              (if (null? maybe-fail-to)

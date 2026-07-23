@@ -1,7 +1,8 @@
 #lang racket
 
 (require "utils.rkt"
-         "simplify.rkt")
+         "simplify.rkt"
+         "helpers.rkt")
 
 (provide clo-convert-mod)
 
@@ -197,18 +198,34 @@
 
 ;; Expr -> (ValuesOf Expr (SetOf Expr) (SetOf Variable))
 (define (clo-convert-inner-def def-ast)
+  ;; Some helpers for this function
+  (struct def-group
+    [defs        ;; (ListOf Expr)
+     free-vars]  ;; (SetOf Variable)
+    #:transparent)
+
+  (define (is-first-def-in-group? group def)
+    (equal? def
+            (first (def-group-defs group))))
+
+
   ;; Unnest the nested sibling defs
-  (define-values (defs rest-ast) (get-sibling-inner-defs def-ast))
+  (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
 
   (define-values (rest-expr rest-new-defs rest-free) (clo-convert-ast rest-ast))
 
+
   ;; A set of lists of def names which are linked together in a fail chain by fail_to.
   ;; The first def in a chain is the entry point.
+  ;; (We need to do this in order to know what is the first def in the chain which we want to
+  ;; convert to an __apply__ and to create a single closure for the entire chain of defs)
   (define fail-chains
-    (for/fold ([chains (set)])
+    (for/fold ([chains (set)]) ;; (SetOf (ListOf Symbol))
               ([def defs])
       (match def
         [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+
+          ;; (or Symbol #f)
           (define maybe-fail-x
             (if (null? maybe-fail-to)
               #f
@@ -225,33 +242,23 @@
                           ([chain chains])
 
                   (if (equal? (last chain) fx)
+                      ;; If this def is at the end of the chain then extend the existing chain with fail-x
                       (values
                         (set-add updated-chains (append chain (list maybe-fail-x))) ;; Extend existing chain
                         #t)
+                      
+                      ;; Otherwise keep looking for the chain to extend
                       (values
                         (set-add updated-chains chain)
                         updated))))
               
               (if updated
-                  updated-chains
-                  (set-add chains (list fx maybe-fail-x)))] ;; Start new chain
+                  updated-chains ;; Extended an existing chain
+                  (set-add chains (list fx maybe-fail-x)))] ;; Otherwise, start new chain
             
             ;; This def's name (i.e. fx) will have already been added to a chain
+            ;; (this must be the last def in the chain since it doesn't have a fail-to)
             [else chains])])))
-
-  (define (get-def-with-name fx)
-    (define (def-name-maches? def)
-      (match def
-        [`(def ((ref ,gx) ,_ ...) ,_ ... ,_) (equal? fx gx)]))
-
-    (for/first ([def defs]
-                #:when (def-name-maches? def))
-      def))
-
-  (struct def-group
-    [defs        ;; (ListOf Expr)
-     free-vars]  ;; (SetOf Variable)
-    #:transparent)
 
   ;; Closure convert def bodies and find free vars for each def group
   (define-values (def-groups lifted-defs-from-bodies)
@@ -263,7 +270,7 @@
                    [new-defs (set)])
                   ([def-name chain])
 
-          (define def (get-def-with-name def-name))
+          (define def (get-def-with-name defs def-name))
           
           (match def
             [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,(and params (or `(ref ,xs)
@@ -288,10 +295,6 @@
       (values
         (set-add def-groups def-g)
         (set-union new-defs more-new-defs))))
-
-  (define (is-first-def-in-group? group def)
-    (equal? def
-            (first (def-group-defs group))))
 
   ;; Fully closure convert defs: each def that is first in its group becomes an __apply__
   ;; and passes around a closure for the entire group.
@@ -330,7 +333,6 @@
               ,@(map (lambda (x) `(ref ,x)) group-free-vars)))
 
           ;; Use unescaped names when registering (they are escaped later on)
-          ;; TODO: maybe refactor to do all the id escaping in alphatize instead of doing some of it in link.rkt
           (register-type! clo-object-tag)
           (register-method! apply-x clo-object-tag new-apply-x)
 
@@ -354,17 +356,33 @@
               (set-add lifted-defs new-lifted-def)
               (set-union (list->set group-free-vars) free-vars))])))
 
-  (define def-names
-    (for/set ([def defs])
-      (match def
-        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
-          fx])))
+  (define def-names (get-def-names defs))
 
   (values
     `(closures ,closure-bindings
        ,rest-expr)
     (set-union lifted-defs lifted-defs-from-bodies rest-new-defs)
     (set-subtract (set-union free-vars rest-free) def-names)))
+
+
+;; (ListOf Expr) -> (SetOf Symbol)
+(define (get-def-names defs)
+  (for/set ([def defs])
+      (get-def-name def)))
+
+;; (ListOf Expr) Symbol -> Expr
+(define (get-def-with-name defs fx)
+    (define (def-name-maches? def) (equal? fx (get-def-name def)))
+
+    (for/first ([def defs]
+                #:when (def-name-maches? def))
+      def))
+
+;; Expr -> Symbol
+(define (get-def-name def)
+  (match def
+    [`(def ((ref ,fx) ,params ...) ,body ...)
+      fx]))
 
 ;; Symbol (ListOf Symbol) Expr -> Expr
 (define (unpack-clo clo-slice-x xs body)
@@ -379,23 +397,6 @@
       `(let (ref ,a) ((ref _first) (ref _none) (bless (const 1)) (ref ,clo-slice-x))
         (let (ref ,clo-slice-rest-x) ((ref _rest) (ref _none) (bless (const 1)) (ref ,clo-slice-x))
           ,(unpack-clo clo-slice-rest-x b body)))]))
-
-;; Expr -> (ValuesOf (ListOf Expr) Expr)
-(define (get-sibling-inner-defs def-ast)
-  (match def-ast
-    [`(def ((ref ,x) ,args ...) ,maybe-fail-to ... ,body ,more)
-      (define-values (defs rest) (get-sibling-inner-defs more))
-
-      (values
-        (append
-          (list `(def ((ref ,x) ,@args) ,@maybe-fail-to ,body))
-          defs)
-        rest)]
-    
-    [_ 
-      (values
-        '()
-        def-ast)]))
 
 (define (with-print-value val-ast ast)
   `(let (ref ,(gensymb '_))
