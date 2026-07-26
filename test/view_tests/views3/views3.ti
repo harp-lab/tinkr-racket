@@ -1,0 +1,5 @@
+include "thing.ti" [rename poke prod]
+
+def (main)
+  let t = (make_thing 41)
+  (debug_print (write (prod t)))

@@ -835,9 +835,37 @@
                  ,@maybe-when ,body)
 		          (hash-ref tails obj list)))]))
   
+  ;; Is this def an unguarded catch-all at its arity: all params are plain
+  ;; variables (or a plain variadic tail) and there is no when guard?
+  (define (default-def? def)
+    (match def
+      [`(def ((ref ,_) ,params ...) ,body) ;; exactly one body form => no when
+       (andmap (lambda (p)
+                 (match p
+                   [`(ref ,_) #t]
+                   [`((ref ,ell) (ref ,_)) #:when (eq? ell '|...|) #t]
+                   [_ #f]))
+               params)]
+      [_ #f]))
+
+  ;; Splits off the maximal trailing run of default cases. Only the trailing
+  ;; run moves so local (textual) priority is never reordered.
+  (define (split-trailing-defaults lst)
+    (let loop ([rev (reverse lst)] [defaults '()])
+      (if (and (pair? rev) (default-def? (car rev)))
+          (loop (cdr rev) (cons (car rev) defaults))
+          (values (reverse rev) defaults))))
+
   ;; Desugar an ordered list of defs
   (define (desugar-defs lst)
-    (define parts (part-by-objects lst))
+    (define parts
+      (let* ([parts0 (part-by-objects lst)]
+             [non-obj (hash-ref parts0 #f '())])
+        (define-values (guarded defaults) (split-trailing-defaults non-obj))
+        (let* ([h (hash-remove parts0 #f)]
+               [h (if (null? guarded) h (hash-set h #f guarded))]
+               [h (if (null? defaults) h (hash-set h 'default defaults))])
+          h)))
 
     (foldr ; flatten by one level
      append '()
@@ -856,7 +884,7 @@
             `((def ((ref ,next-x) (ref ,fallback-x) ,@params (,ell (ref ,params-rest-x)))
               (continue-dispatch (ref ,fallback-x) ,@params (ref ,params-rest-x))))] ;; continue-dispatch: a special form (removed later on) that continues with the fallback
           [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
-            #:when obj-info ;; This is an obj-pattern def:
+            #:when (pair? obj-info) ;; This is an obj-pattern def:
             (match-define (cons kind obj-tag) obj-info)
             (define mynext (gensymb x))
             (define tag+ (if (eq? kind 'subword)
@@ -870,7 +898,7 @@
                     gx)))
             (cons (desugar-one-def gx mynext (first ls))
                   (loop more mynext))]
-          ;; For all non-obj-pattern defs:
+          ;; For all non-obj-pattern defs (obj-info is #f or 'default):
           [`((def ((ref ,x) ,_ ...) ,_ ...) ,more ...)
             (define mynext (gensymb x))
             (define gx
@@ -878,7 +906,7 @@
                   next-x
                   (let ([gx (gensymb x)])
                     ;; register just this first one
-                    (register-method! x #f gx)
+                    (register-method! x obj-info gx)
                     gx)))
             (cons (desugar-one-def gx mynext (first ls))
                   (loop more mynext))])))))

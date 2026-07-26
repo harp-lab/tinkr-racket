@@ -1,0 +1,7 @@
+include "a6.ti" [rename p q] [rename q p]
+
+def (main)
+{
+  (debug_print (write (q 0)))
+  (debug_print (write (p 0)))
+}

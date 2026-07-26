@@ -1,0 +1,3 @@
+def (make_thing x) `[thing ,x]
+
+def (poke `[thing ,x]) x + 1

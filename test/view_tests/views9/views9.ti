@@ -1,0 +1,10 @@
+include "lib9.ti" [as lib]
+
+def (f x) 5
+
+def (main)
+{
+  (debug_print (write (f 3)))
+  (debug_print (write (lib.f 1)))
+  (debug_print (write (lib.f 3)))
+}

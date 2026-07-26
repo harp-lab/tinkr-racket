@@ -1,0 +1,10 @@
+include "a1.ti" [rename foo bar]
+
+def (bar 5) 505
+
+def (main)
+{
+  (debug_print (write (bar 5)))
+  (debug_print (write (bar 1)))
+  (debug_print (write (bar 88)))
+}
