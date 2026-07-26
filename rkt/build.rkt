@@ -114,11 +114,24 @@
       '()))
 
 
+;; Build-dir stems become C identifier material (mv_<dir>__<name> symbols
+;; embed them), so only [A-Za-z0-9_] may pass through. '.' keeps the
+;; readable '_' convention; anything else (hyphens, spaces, ...) gets the
+;; same hex escape escape-id-for-C uses.
+(define (sanitize-dir-stem name)
+  (apply string-append
+         (for/list ([c (in-string name)])
+           (cond [(or (char-alphabetic? c) (char-numeric? c) (eqv? c #\_))
+                  (string c)]
+                 [(eqv? c #\.) "_"]
+                 [else (string-append "_" (~r (char->integer c) #:base 16
+                                              #:min-width 5 #:pad-string "0"))]))))
+
 (define (install-to-files path)
-  
+
   (define hash (hash-content path))
   (define name (path->string (file-name-from-path path)))
-  (define dir-name (format "~a_~a~a" (string-replace name "." "_") hash compiler-salt))
+  (define dir-name (format "~a_~a~a" (sanitize-dir-stem name) hash compiler-salt))
   (define files-dir (build-path "/tmp/ti/files" dir-name))
   
   (unless (directory-exists? files-dir)

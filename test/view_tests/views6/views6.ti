@@ -1,4 +1,4 @@
-include "a6.ti" [rename p q] [rename q p]
+include "a6.ti" [rename p tmp] [rename q p] [rename tmp q]
 
 def (main)
 {

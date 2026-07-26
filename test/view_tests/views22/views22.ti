@@ -1,0 +1,4 @@
+include "lib22.ti" [except sort] [rename fast_sort sort]
+
+def (main)
+  (debug_print (write (sort 0)))

@@ -1,3 +1,4 @@
+include "lib9.ti"
 include "lib9.ti" [as lib]
 
 def (f x) 5

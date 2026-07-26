@@ -1,0 +1,4 @@
+include "mid20.ti" [rename D.g g_direct]
+
+def (main)
+  (debug_print (write (g_direct 7)))

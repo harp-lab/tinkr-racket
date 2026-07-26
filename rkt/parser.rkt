@@ -304,7 +304,20 @@
             (cond [(equal? s "]") (advance) '()]
                   [(eq? 'eof (token->tag (peek)))
                    (error "Unterminated include clause [ ... ]")]
-                  [else (advance) (cons (string->symbol s) (loop))])))
+                  [else
+                   (advance)
+                   ;; Fold dotted names (M . x . y) into one symbol M.x.y so
+                   ;; clauses can mention alias-qualified spellings.
+                   (define name
+                     (let fold ([acc s])
+                       (if (and (equal? "." (token->str (peek)))
+                                (not (equal? "]" (token->str (peek 1))))
+                                (not (eq? 'eof (token->tag (peek 1)))))
+                           (let ([nxt (token->str (peek 1))])
+                             (advance 1)
+                             (fold (string-append acc "." nxt)))
+                           acc)))
+                   (cons (string->symbol name) (loop))])))
         (cons `(clause ,@items) (parse-include-clauses)))
       '()))
 
