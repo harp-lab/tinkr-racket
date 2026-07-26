@@ -1,0 +1,7 @@
+include "lib11.ti" [only] [rename f g] [as m]
+
+def (main)
+{
+  (debug_print (write (g 0)))
+  (debug_print (write (m.g 0)))
+}

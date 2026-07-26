@@ -289,6 +289,25 @@
   (define body (if is-toplevel (parse-top-level) (parse qd)))
   (emit-expr `(let ,pat ,rhs ,body) start-tok))
 
+;; Parses zero or more [ ... ] clause groups following an include's path.
+;; Each group is read as a flat list of raw token symbols (no operator
+;; parsing, so names like + and * are just names here):
+;;   include "m.ti" [rename + concat] [except foo bar] [only baz]
+;; producing (clause rename + concat), (clause except foo bar), ...
+(define (parse-include-clauses)
+  (if (equal? "[" (token->str (peek)))
+      (let ()
+        (advance) ;; consume [
+        (define items
+          (let loop ()
+            (define s (token->str (peek)))
+            (cond [(equal? s "]") (advance) '()]
+                  [(eq? 'eof (token->tag (peek)))
+                   (error "Unterminated include clause [ ... ]")]
+                  [else (advance) (cons (string->symbol s) (loop))])))
+        (cons `(clause ,@items) (parse-include-clauses)))
+      '()))
+
 (define (parse-top-level)
       (define start-tok (peek))
       (define str (token->str start-tok))
@@ -307,7 +326,12 @@
 	["test" (parse-test #t 0)]
 
 	["let" (parse-let #t 0)]
-        [(or "use" "include" "bless")
+        ["include"
+         (define tag-str (parse-id-then-N parse 1 0))
+         (define clauses (parse-include-clauses))
+         (define body (parse-top-level))
+         (emit-expr `(,@tag-str ,@clauses ,body) start-tok)]
+        [(or "use" "bless")
          (define tag-str (parse-id-then-N parse 1 0))
          (define body (parse-top-level))
          (emit-expr `(,@tag-str ,body) start-tok)]
