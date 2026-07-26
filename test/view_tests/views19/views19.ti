@@ -1,0 +1,7 @@
+include "mid19.ti" [as M]
+
+def (main)
+{
+  (debug_print (write (M.h 1)))
+  (debug_print (write (M.D.g 7)))
+}

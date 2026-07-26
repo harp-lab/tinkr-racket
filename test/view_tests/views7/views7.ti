@@ -1,4 +1,4 @@
-include "lib7.ti" [only keep] [rename f g]
+include "lib7.ti" [rename f g] [only keep g]
 
 def (drop x) 33
 

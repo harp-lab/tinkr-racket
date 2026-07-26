@@ -1,0 +1,3 @@
+def (foo x) 700
+
+def (foo x y) 777

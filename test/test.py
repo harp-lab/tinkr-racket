@@ -8,7 +8,7 @@ from subprocess import PIPE, STDOUT, Popen, TimeoutExpired
 
 TIMEOUT = 240
 LONG_TESTS = []
-KNOWN_FAILING_TESTS = ["fun2", "lambda", "object_splicing", "patterns1", "patterns2", "patterns3", "patterns4", "str", "unsplice"]
+KNOWN_FAILING_TESTS = ["lambda", "object_splicing", "patterns1", "patterns2", "patterns3", "patterns4", "str", "unsplice"]
 BLACKLIST = ["test.py", "test.rkt", "files",
              "tests", # only keep new_tests for now
 

@@ -81,6 +81,11 @@
   (with-output-to-file (path-replace-extension src-path ".globals")
     #:exists 'replace
     (lambda () (write (set->list global-names))))
+  ;; Names whose absence must be a runtime dispatch error (closure
+  ;; fallbacks), not a shim to an assumed C function.
+  (with-output-to-file (path-replace-extension src-path ".soft")
+    #:exists 'replace
+    (lambda () (write (set->list soft-globals))))
   mod+)
 
 

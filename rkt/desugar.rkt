@@ -676,11 +676,21 @@
                                 (list (desugar-one-def new-def-x next-def-x def)))
                         next-def-x)])))
 
-      ;; Insert a last def which falls back to try the outer scope
+      ;; Insert a last def which falls back to try the outer scope. The
+      ;; callee is marked as a fallback-ref: it resolves lexically like any
+      ;; ref, but if it ends up free, the module records that a missing
+      ;; top-level binding must become a runtime dispatch error, not a shim
+      ;; to an assumed C function.
       (define args-rest-x (gensymb 'args_rest))
+      (define last-def-body
+        (let swap ([e (desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))])
+          (match e
+            [`(ref ,x) #:when (eq? x def-name) `(fallback-ref ,x)]
+            [(? list? l) (map swap l)]
+            [_ e])))
       (define last-def+
         `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
-            ,(desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))))
+            ,last-def-body))
 
       (values
         (cons

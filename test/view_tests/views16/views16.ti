@@ -1,0 +1,7 @@
+include "lib16.ti" [as M] [rename M.f f_direct]
+
+def (main)
+{
+  (debug_print (write (f_direct 0)))
+  (debug_print (write (M.h 0)))
+}

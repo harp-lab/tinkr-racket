@@ -1,4 +1,4 @@
-include "lib10.ti" [only] [as m]
+include "lib10.ti" [as m]
 
 def (g x) 42
 

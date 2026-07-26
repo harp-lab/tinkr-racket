@@ -12,6 +12,7 @@
 
          ;; TODO: we probably shouldn't export these
          global-names
+         soft-globals
          reserved-bl-x
 
          (contract-out
@@ -20,6 +21,10 @@
 
 
 (define global-names 0) ;; (set)
+;; Free names that came from closure-chain fallbacks: if such a name
+;; resolves to nothing at link time, the module demands a runtime dispatch
+;; error at that point (never a shim to an assumed C function).
+(define soft-globals (set))
 (define reserved-bl-x (set '|!|))
 
 (define (alphatize ast) 
@@ -52,6 +57,16 @@
        (define x+ (resolve-id x))
        (when (not (hash-has-key? env x))
         (set! global-names (set-add global-names x+)))
+       `(ref ,x+)]
+
+      ;; A closure-chain fallback reference: resolves lexically like any
+      ;; ref, but when free it is additionally recorded as soft — a missing
+      ;; top-level binding must become a runtime dispatch error.
+      [`(fallback-ref ,x)
+       (define x+ (resolve-id x))
+       (when (not (hash-has-key? env x))
+        (set! global-names (set-add global-names x+))
+        (set! soft-globals (set-add soft-globals x+)))
        `(ref ,x+)]
 
       ;; No change to constants, blessed
@@ -592,6 +607,7 @@
 (define (alphatize-mod mod)
   (set! global-names (set 'v_equal
                           '_u_0003d)) ; Unicode name for =
+  (set! soft-globals (set))
   (match mod
     [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
      (set! reserved-bl-x

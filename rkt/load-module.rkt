@@ -6,51 +6,33 @@
 
 ;; --- Qualified references: include "m.ti" [as m] enables m.x ---
 
-;; Collects [as <alias>] clauses from this module's .ti includes.
-;; Returns alias-symbol -> include-path-string.
-(define (collect-aliases ast path)
-  (define aliases (make-hash))
-  (let walk ([e ast])
-    (match e
-      [`(include (const ,p) ,cls ... ,body)
-       (for ([c (in-list cls)])
-         (match c
-           [`(clause as ,m)
-            (unless (and (string? p) (string-suffix? p ".ti"))
-              (error (format "load error in ~a: [as ~a] is only meaningful on a .ti module include, but appears on include \"~a\"" path m p)))
-            (when (hash-has-key? aliases m)
-              (error (format "load error in ~a: duplicate module alias '~a' — [as ~a] appears on more than one include" path m m)))
-            (hash-set! aliases m p)]
-           [`(clause as ,_ ...)
-            (error (format "load error in ~a: malformed [as ...] clause on include \"~a\" — expected exactly one alias name, e.g. [as m]" path p))]
-           [_ (void)]))
-       (walk body)]
-      [(? list? l) (for-each walk l)]
-      [_ (void)]))
-  aliases)
+;; Folds a left-nested chain of '.' applications of bare refs into one
+;; dotted name string: ((a.b).c) -> "a.b.c". Any other '.' shape is #f.
+(define (dot-chain->name e)
+  (match e
+    [`(ref ,x) (and (symbol? x) (symbol->string x))]
+    [`((ref ,d) ,lhs ,rhs)
+     #:when (eq? d '|.|)
+     (define l (dot-chain->name lhs))
+     (define r (dot-chain->name rhs))
+     (and l r (string-append l "." r))]
+    [_ #f]))
 
-;; Rewrites alias-qualified references m.x into single free names |m.x|.
-;; These flow through the whole pipeline as ordinary global refs; since
-;; identifiers cannot contain dots, they can never collide with user names,
-;; and escape-id-for-C renders the dot as the unforgeable marker _0002e
-;; that the linker splits back apart.
-(define (rewrite-qualified ast aliases path)
+;; Rewrites alias-qualified references m.x (or m.n.x ...) into single free
+;; names |m.x|. These flow through the whole pipeline as ordinary global
+;; refs; since identifiers cannot contain dots, they can never collide with
+;; user names, and escape-id-for-C renders the dot as the unforgeable marker
+;; _0002e that the linker splits back apart. Whether a dotted name resolves
+;; is decided at link time (aliases may arrive through transitive includes).
+(define (rewrite-qualified ast path)
   (let Q ([e ast])
     (match e
       [`((ref ,d) ,lhs ,rhs)
        #:when (eq? d '|.|)
-       (match* (lhs rhs)
-         [(`(ref ,m) `(ref ,x))
-          (unless (hash-has-key? aliases m)
-            (error (format "load error in ~a: unknown module alias '~a' in qualified reference ~a.~a — aliases in scope: ~a. Add [as ~a] to the intended include."
-                           path m m x
-                           (if (hash-empty? aliases)
-                               "(none)"
-                               (string-join (map symbol->string (hash-keys aliases)) ", "))
-                           m)))
-          `(ref ,(string->symbol (format "~a.~a" m x)))]
-         [(_ _)
-          (error (format "load error in ~a: a qualified reference must have the form <alias>.<name>; '.' was applied to ~v and ~v" path lhs rhs))])]
+       (define name (dot-chain->name e))
+       (unless name
+         (error (format "load error in ~a: a qualified reference must have the form <alias>.<name> (aliases may nest: a.b.x); '.' was applied to ~v and ~v" path lhs rhs)))
+       `(ref ,(string->symbol name))]
       [(? list? l) (map Q l)]
       [_ e])))
 
@@ -61,9 +43,7 @@
   (define-values (_3 dir-name _4) (split-path (simplify-path base-dir)))
   (define mod-name (path->string dir-name))
 
-  (define ast0 (strip-prov (parse-file path)))
-  (define aliases (collect-aliases ast0 path))
-  (define ast (rewrite-qualified ast0 aliases path))
+  (define ast (rewrite-qualified (strip-prov (parse-file path)) path))
 
   (let loop ([ast ast]
              [bless-acc '()]

@@ -1,4 +1,4 @@
-include "mid12.ti" [only] [as m]
+include "mid12.ti" [as m]
 
 def (main)
   (debug_print (write (m.d 0)))

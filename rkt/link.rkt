@@ -20,27 +20,33 @@
     (for/hash ([m (in-list (cdr (assq 'modules graph-data)))])
       (values (car m) (cdr m))))
 
-  ;; Friendly validation of include clauses: shapes, duplicates, unknown heads.
+  ;; Friendly validation of include clauses: shapes and duplicates. Clauses
+  ;; are functional transformations applied left to right; each edge may
+  ;; carry at most one [as] (use a second include line for more).
   (for ([(dir edges) (in-hash graph-edges)])
-    (define seen-aliases (mutable-set))
     (for ([e (in-list edges)])
       (define seen-rename-targets (mutable-set))
+      (define as-count 0)
       (for ([c (in-list (cdr e))])
         (match c
           [`(clause rename ,old ,new)
            (when (set-member? seen-rename-targets new)
-             (eprintf "link warning: in module ~a, more than one name is renamed to '~a' on the same include (the first rename wins)\n"
+             (eprintf "link warning: in module ~a, more than one rename targets '~a' on the same include (the later rename shadows the earlier)\n"
                       dir new))
            (set-add! seen-rename-targets new)]
           [`(clause rename ,_ ...)
            (error 'link (format "malformed [rename ...] clause in module ~a: expected [rename <old> <new>], got [~a]"
                                 dir (string-join (map ~a (cdr c)) " ")))]
+          [`(clause except)
+           (error 'link (format "empty [except] clause in module ~a: list at least one name" dir))]
+          [`(clause only)
+           (error 'link (format "empty [only] clause in module ~a: list at least one name ([as M] alone imports qualified-only)" dir))]
           [`(clause except ,_ ...) (void)]
           [`(clause only ,_ ...) (void)]
           [`(clause as ,m)
-           (when (set-member? seen-aliases m)
-             (error 'link (format "duplicate module alias '~a' in module ~a: [as ~a] appears on more than one include" m dir m)))
-           (set-add! seen-aliases m)]
+           (set! as-count (add1 as-count))
+           (when (> as-count 1)
+             (error 'link (format "more than one [as ...] clause on a single include in module ~a — use a second include line instead" dir)))]
           [`(clause as ,_ ...)
            (error 'link (format "malformed [as ...] clause in module ~a: expected exactly one alias name, e.g. [as m]" dir))]
           [`(clause ,h ,_ ...)
@@ -64,6 +70,9 @@
              (define globals-file
                (path-replace-extension (build-path subdir (car bl-files))
                                        ".used"))
+             (define soft-file
+               (path-replace-extension (build-path subdir (car bl-files))
+                                       ".soft"))
              (hash-set h (~a name)
                (hash 'mtag mtag
                      'methods methods
@@ -72,6 +81,9 @@
                      'globals (if (file-exists? globals-file)
                                   (with-input-from-file globals-file read)
                                   '())
+                     'soft (if (file-exists? soft-file)
+                               (list->set (with-input-from-file soft-file read))
+                               (set))
                      'types types))]))))
 
   ;; Alphabetical module order (matches the old directory-list order)
@@ -296,54 +308,40 @@
     (and kv (cdr kv)))
 
   ;; Given the name `spelled` as the includer spells it, the corresponding
-  ;; spelling in the include target, or #f if the name is not imported.
-  ;; An explicit rename imports unconditionally; otherwise the name must
-  ;; survive except/only filters and must not have been renamed away.
+  ;; spelling in the include target, or #f if this edge does not export
+  ;; that spelling. Clauses are functional transformations of the edge's
+  ;; export set, applied left to right:
+  ;;   [rename x y]  x is now spelled y (the old spelling is gone)
+  ;;   [only a b]    restrict the current set to {a, b}
+  ;;   [except a]    remove a from the current set
+  ;;   [as M]        every name n becomes M.n (nothing stays unqualified)
+  ;; We evaluate their inverses right to left on one spelling at a time.
   (define (resolve-spelling spelled clauses)
-    (define cs (map cdr clauses)) ;; strip the 'clause tag
-    (define renames (for/list ([c (in-list cs)] #:when (eq? (car c) 'rename)) c))
-    (define hit (for/first ([c (in-list renames)]
-                            #:when (eq? (caddr c) spelled))
-                  (cadr c)))
-    (define renamed-olds (map cadr renames))
-    (define excepts (for*/list ([c (in-list cs)] #:when (eq? (car c) 'except)
-                                [x (in-list (cdr c))]) x))
-    (define onlys (for*/list ([c (in-list cs)] #:when (eq? (car c) 'only)
-                              [x (in-list (cdr c))]) x))
-    ;; The presence of any [only ...] clause activates the whitelist, even
-    ;; an empty one: include "m.ti" [only] [as m] merges nothing unqualified.
-    (define has-only? (for/or ([c (in-list cs)]) (eq? (car c) 'only)))
-    (cond [hit hit]
-          [(memq spelled renamed-olds) #f]
-          [(memq spelled excepts) #f]
-          [(and has-only? (not (memq spelled onlys))) #f]
-          [else spelled]))
-
-  ;; Clause semantics for qualified (alias.name) references: renames define
-  ;; the spelling vocabulary and apply to both access paths, but except/only
-  ;; curate only the unqualified merge — an alias is a full window onto the
-  ;; target's view under the edge's renames.
-  (define (resolve-spelling/qualified spelled clauses)
-    (define cs (map cdr clauses))
-    (define renames (for/list ([c (in-list cs)] #:when (eq? (car c) 'rename)) c))
-    (define hit (for/first ([c (in-list renames)]
-                            #:when (eq? (caddr c) spelled))
-                  (cadr c)))
-    (cond [hit hit]
-          [(memq spelled (map cadr renames)) #f] ;; renamed away
-          [else spelled]))
+    (let loop ([cs (reverse (map cdr clauses))] [s spelled])
+      (match cs
+        ['() s]
+        [(cons c rest)
+         (match c
+           [`(as ,m)
+            (define str (symbol->string s))
+            (define pre (string-append (symbol->string m) "."))
+            (and (string-prefix? str pre)
+                 (loop rest (string->symbol
+                             (substring str (string-length pre)))))]
+           [`(rename ,old ,new)
+            (cond [(eq? s new) (loop rest old)]
+                  [(eq? s old) #f] ;; renamed away
+                  [else (loop rest s)])]
+           [`(only ,xs ...)
+            (and (memq s xs) (loop rest s))]
+           [`(except ,xs ...)
+            (and (not (memq s xs)) (loop rest s))]
+           [_ (loop rest s)])]))) ;; unknown heads are inert (warned above)
 
   ;; ---- Qualified references: mv_<dir>___m_0002ex came from m.x ----
-  ;; escape-id-for-C renders '.' as _0002e, which no source identifier can
-  ;; produce (a literal '_' always escapes to '__'), so splitting on the
-  ;; first occurrence is unambiguous.
-  (define (split-qualified g)
-    (define s (symbol->string g))
-    (define p (regexp-match-positions #rx"_0002e" s))
-    (and p (cons (substring s 0 (caar p)) (substring s (cdar p)))))
 
-  ;; Inverts escape-id-for-C on a suffix (a tail never carries the _/_u
-  ;; prefix): __ -> _, _XXXXX (five hex digits) -> that character.
+  ;; Inverts escape-id-for-C on a body (after its _/_u prefix is removed):
+  ;; __ -> _, _XXXXX (five hex digits) -> that character.
   (define (unescape-tail s)
     (let loop ([cs (string->list s)] [acc '()])
       (match cs
@@ -354,15 +352,72 @@
                        acc))]
         [(cons c r) (loop r (cons c acc))])))
 
-  (define dir-aliases ;; dir -> (alias -> include edge)
-    (for/hash ([(dir edges) (in-hash graph-edges)])
-      (values dir
-              (for*/fold ([h (hash)])
-                         ([e (in-list edges)]
-                          [c (in-list (cdr e))])
-                (match c
-                  [`(clause as ,m) (hash-set h m e)]
-                  [_ h])))))
+  ;; Recovers the raw dotted name from an escaped spelling, or #f if it is
+  ;; not a dotted name. escape-id-for-C renders '.' as _0002e, which no
+  ;; source identifier can produce (a literal '_' escapes to '__'); the
+  ;; round-trip check disambiguates the _/_u prefix and rejects lookalikes.
+  (define (recover-dotted g)
+    (define s (symbol->string g))
+    (and (regexp-match? #rx"_0002e" s)
+         (for/or ([p (in-list '(1 2))])
+           (and (> (string-length s) p)
+                (let ([raw (with-handlers ([exn:fail? (lambda (_) #f)])
+                             (unescape-tail (substring s p)))])
+                  (and raw
+                       (eq? (escape-id-for-C raw) g)
+                       (string-contains? (symbol->string raw) ".")
+                       raw))))))
+
+  ;; Recovers the raw name from any escaped spelling via the same
+  ;; round-trip check (dotted or not), or #f if the spelling is not the
+  ;; escape of anything.
+  (define (recover-raw g)
+    (define s (symbol->string g))
+    (for/or ([p (in-list '(1 2))])
+      (and (> (string-length s) p)
+           (let ([raw (with-handlers ([exn:fail? (lambda (_) #f)])
+                        (unescape-tail (substring s p)))])
+             (and raw (eq? (escape-id-for-C raw) g) raw)))))
+
+  ;; First (dir . undotted-name) a dotted spelling resolves to, in the same
+  ;; preorder the view walks — used to classify lets/blessed and to give a
+  ;; friendly unknown-alias error.
+  (define (first-resolution m spelled)
+    (define visited (mutable-set))
+    (let visit ([dir m] [s spelled])
+      (and (hash-has-key? mod-infos dir)
+           (not (set-member? visited (cons dir s)))
+           (begin
+             (set-add! visited (cons dir s))
+             (if (not (string-contains? (symbol->string s) "."))
+                 (cons dir s)
+                 (for/or ([e (in-list (hash-ref graph-edges dir '()))])
+                   (define s+ (resolve-spelling s (cdr e)))
+                   (and s+ (visit (car e) s+))))))))
+
+  ;; Warn when a rename lands on a spelling that is still occupied at that
+  ;; point in the clause pipeline (a def the include target exports under
+  ;; that spelling). An earlier [except new], [only ...], or rename-away of
+  ;; the spelling resolves to #f and so expresses the shadowing intent —
+  ;; the same evaluation that defines the semantics suppresses the warning.
+  ;; (Approximation: collisions with top-level lets or blessed C functions
+  ;; are not detected — only def dispatch names are enumerable here.)
+  (define dir-method-names
+    (for/hash ([(dir info) (in-hash mod-infos)])
+      (values dir (for/set ([mkv (in-list (hash-ref info 'methods))])
+                    (car (car mkv))))))
+  (for ([(dir edges) (in-hash graph-edges)])
+    (for ([e (in-list edges)])
+      (define t-methods (hash-ref dir-method-names (car e) (set)))
+      (for ([i (in-naturals)]
+            [c (in-list (cdr e))])
+        (match c
+          [`(clause rename ,old ,new)
+           (define t (resolve-spelling new (take (cdr e) i)))
+           (when (and t (set-member? t-methods t))
+             (eprintf "link warning: in module ~a, [rename ~a ~a] shadows an existing '~a' from ~a — add [except ~a] before the rename if intentional\n"
+                      dir old new new (car e) new))]
+          [_ (void)]))))
 
   ;; Does module `dir` register any receiver (object/subword) method under
   ;; spelling `s`? If so, a view passing through `dir` must probe `s`'s row.
@@ -475,45 +530,49 @@
     (for ([g (in-list (hash-ref info 'globals))]
           #:unless (memq g '(v_equal _u_0003d)))
       (define sym (format "mv_~a__~a" dir g))
-      ;; A qualified reference alias.x: match the escaped prefix against this
-      ;; module's aliases (a lookalike name with no matching alias falls
-      ;; through to the ordinary path).
-      (define qual
-        (let ([q (split-qualified g)])
-          (and q
-               (for/first ([(m e) (in-hash (hash-ref dir-aliases dir (hash)))]
-                           #:when (equal? (symbol->string (escape-id-for-C m))
-                                          (car q)))
-                 (list m e (unescape-tail (cdr q)))))))
-      (define n (and (not qual) (hash-ref escaped->raw g #f)))
+      (define dotted (recover-dotted g))
+      (define n (and (not dotted) (hash-ref escaped->raw g #f)))
       (cond
-        [qual
-         (match-define (list m e raw-x) qual)
-         (define dotted (string->symbol (format "~a.~a" m raw-x)))
-         (define spelled (resolve-spelling/qualified raw-x (cdr e)))
+        [dotted
+         (define res (first-resolution dir dotted))
+         (unless res
+           (error 'link (format "unknown module alias or qualified name ~a referenced in module ~a — no include exports this spelling" dotted dir)))
+         (define base (cdr res))
+         (define-values (events0 dseg) (compute-view dir dotted))
+         ;; Receiver methods travel with values: seed a probe for the base
+         ;; name if it has object methods anywhere and no probe was placed.
+         (define events
+           (if (and (set-member? obj-method-names base)
+                    (not (member (cons 'probe base) events0)))
+               (cons (cons 'probe base) events0)
+               events0))
          (cond
-           [(not spelled)
-            (eprintf "link warning: qualified reference ~a in module ~a names a spelling that include renames away\n"
-                     dotted dir)
-            (emit-view-dispatcher! sym dotted '() '())]
-           [(hash-has-key? escaped->raw (escape-id-for-C spelled))
-            (define-values (events dseg) (compute-view (car e) spelled))
-            (when (and (null? events) (null? dseg))
-              (eprintf "link warning: module ~a references ~a but no definition of '~a' is visible from '~a's includes\n"
-                       dir dotted spelled m))
+           [(or (pair? events) (pair? dseg))
             (emit-view-dispatcher! sym dotted events dseg)]
-           [(set-member? all-let-names spelled)
-            (emit-let-alias! sym (escape-id-for-C spelled))]
+           [(set-member? all-let-names base)
+            (emit-let-alias! sym (escape-id-for-C base))]
+           [(hash-has-key? escaped->raw (escape-id-for-C base))
+            (eprintf "link warning: module ~a references ~a but no definition of '~a' is visible along that path\n"
+                     dir dotted base)
+            (emit-view-dispatcher! sym dotted events dseg)]
            [else ;; a blessed C function (global by name)
-            (emit-shim! sym (escape-id-for-C spelled))])]
+            (emit-shim! sym (escape-id-for-C base))])]
         [n
          (define-values (events dseg) (compute-view dir n))
-         (when (and (null? events) (null? dseg))
+         ;; A closure fallback (soft) with an empty view is legitimate code
+         ;; that errors at runtime if reached — only warn for direct calls.
+         (when (and (null? events) (null? dseg)
+                    (not (set-member? (hash-ref info 'soft) g)))
            (eprintf "link warning: module ~a references '~a' but no definition is visible from its includes\n"
                     dir n))
          (emit-view-dispatcher! sym n events dseg)]
         [(set-member? all-let-names g)
          (emit-let-alias! sym g)]
+        [(set-member? (hash-ref info 'soft) g)
+         ;; A closure fallback to a name that is a method nowhere: the
+         ;; module demands a runtime dispatch error here, not a shim to an
+         ;; assumed C function.
+         (emit-view-dispatcher! sym (or (recover-raw g) g) '() '())]
         [else ;; a blessed C function (global by name)
          (emit-shim! sym g)])))
 
