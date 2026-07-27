@@ -1,0 +1,56 @@
+
+def (is_even x)
+  "error"
+def (is_odd x)
+  "error"
+def (f x)
+  "error"
+def (fact x)
+  "error"
+def (fib x)
+  "error"
+def (g x)
+  "error"
+
+def (map f []) []
+def (map f [x xs ...])
+  [(f x) (map f xs) ...]
+
+def (main)
+  def (fact 0) 1
+  def (fact 1) 1
+  def (fact n) n * (fact n-1)
+
+  def (g x)
+    "error"
+
+  def (f x)
+    def (fact 2)
+      "<fact inside f>"
+
+    def (g x)
+      def (is_even x)
+        if (= x 0) true
+        if (= x 1) false
+        (is_odd (- x 1))
+      def (is_odd x)
+        if (= x 0) false
+        if (= x 1) true
+        (is_even (- x 1))
+
+      def (fib 0) 0
+      def (fib 1) 1
+      def (fib n) (fib n-1) + (fib n-2)
+
+      def (fact 0)
+        "<fact inside g>"
+
+      if (is_even x)
+         (fact x)
+         (fib x)
+    
+    (map g x)
+
+  {
+    (debug_print (write (f [0 1 2 3 4 5 6 7 8])))
+  }

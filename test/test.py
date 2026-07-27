@@ -8,6 +8,7 @@ from subprocess import PIPE, STDOUT, Popen, TimeoutExpired
 
 TIMEOUT = 240
 LONG_TESTS = []
+KNOWN_FAILING_TESTS = ["fun2", "lambda", "object_splicing", "patterns1", "patterns2", "patterns3", "patterns4", "str", "unsplice"]
 BLACKLIST = ["test.py", "test.rkt", "files",
              "tests", # only keep new_tests for now
 
@@ -198,7 +199,7 @@ def list_all_tests():
         tests += [
             (test, test_dir)
             for test in os.listdir(os.path.join(PATH, test_dir))
-            if not test.startswith(".")
+            if not test.startswith(".") and not test in BLACKLIST
         ]
 
     tests.sort()
@@ -215,6 +216,9 @@ def main():
     parser.add_argument("--all", "-a", help="Perform all tests", action="store_true")
     parser.add_argument(
         "--test", "-t", nargs="*", type=str, help="Perform a specific testname (case sensitive; can pass multiple test names)"
+    )
+    parser.add_argument(
+        "--ignore_failing", "-f", help="Ignore known failing test cases", action="store_true"
     )
     parser.add_argument(
         "--iterations",
@@ -235,6 +239,9 @@ def main():
 
     if args.racket_path:
         racket_path = args.racket_path
+
+    if args.ignore_failing:
+        BLACKLIST.extend(KNOWN_FAILING_TESTS)
 
     if args.all:
         run_all_tests(racket_path, iters, quick=False)

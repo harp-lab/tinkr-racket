@@ -2,11 +2,21 @@
 
 (require "utils.rkt")
 (require "langs.rkt")
+(require "helpers.rkt")
 
-(provide (contract-out
+(provide alphatize-mod
+         limit-def-params-in-mod
+         anf-convert-mod
+         cps-convert-mod
+         lower-mod
+
+         ;; TODO: we probably shouldn't export these
+         global-names
+         reserved-bl-x
+
+         (contract-out
           [alphatize (-> sm-core-ir? sm-core-ir?)]
-          [anf-convert (-> sm-core-ir? sm-core-ir?)]
-          [simplify-module (-> any/c any/c)]))
+          [anf-convert (-> sm-core-ir? sm-core-ir?)]))
 
 
 (define global-names 0) ;; (set)
@@ -54,8 +64,11 @@
       [`(continue-dispatch ,es ...)
        `(continue-dispatch ,@(map recur es))]
 
-      [`(fail ,fail-ref)
-       `(fail ,(recur fail-ref))]
+      [`(fail)
+       `(fail)]
+
+      [`(fail_to ,fail-ref)
+       `(fail_to ,(recur fail-ref))]
 
       [`(,ell ,e0) #:when (eq? ell '|...|)
        `(,ell ,(recur e0))]
@@ -76,6 +89,10 @@
       ;; slices
       [`(|[]| ,es ...)
        `(|[]| ,@(map recur es))]
+      
+      ;; Inner defs
+      [`(def ((ref ,fx) ,args ...) ,maybe-fail-to ... ,body ,more)
+        (alphatize-inner-def ast env)]
 
       ;; Untagged application
       [`((ref ,fx) ,es ...) (map recur ast)]
@@ -83,25 +100,78 @@
       [_ (pretty-print ast)
         (error 'alphatize-error)]))
   
+  ;; Expr (HashOf Symbol Symbol) -> Expr
+  (define (alphatize-inner-def def-ast env)
+    ;; Unnest the nested sibling defs
+    (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
+
+    ;; Construct an env with all the sibling defs' new names
+    (define-values (new-defs env+)
+      (for/fold ([new-defs (list)]
+                 [env+ env])
+                ([def (reverse defs)])
+        (match def
+          [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+            (define fx+ (gensymb fx))
+            (define env++ (hash-set env+ fx fx+))
+            
+            (values
+              (cons
+                `(def ((ref ,(escape-id-for-C fx+)) ,@params) ,@maybe-fail-to
+                  ,body)
+                new-defs)
+              env++)])))
+    
+    ;; Alphatize each defs body with env+
+    (define final-defs
+      (for/list ([def new-defs])
+        (match def
+          [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+            ;; Construct an env for the body
+            (define-values (params+ body-env) (alphatize-param-list params env+))
+            
+            (define alphatized-maybe-fail-to
+              (if (null? maybe-fail-to)
+                   '()
+                   (list (alphatize+ (car maybe-fail-to) env+))))
+
+            `(def ((ref ,fx) ,@params+) ,@alphatized-maybe-fail-to
+              ,(alphatize+ body body-env))])))
+
+    ;; Splices/nests the defs back together with `rest-ast` at the center
+    (nest-sibling-defs final-defs (alphatize+ rest-ast env+)))
+
+  ;; (ListOf Expr) (HashOf Symbol Symbol) -> (ValuesOf (ListOf Expr) (HashOf Symbol Symbol))
+  (define (alphatize-param-list params env)
+    (for/fold ([params+ (list)]
+               [env+ env])
+              ([param (in-list params)])
+      (match param
+        [`(ref ,x)
+          (define x+ (gensymb x))
+          (values
+            (append params+ (list `(ref ,(escape-id-for-C x+))))
+            (hash-set env+ x x+))]
+        [`(,ell (ref ,x)) #:when (eq? ell '|...|)
+          (define x+ (gensymb x))
+          (values
+            (append params+ (list `(,ell (ref ,(escape-id-for-C x+)))))
+            (hash-set env+ x x+))])))
+
   (match ast
     [`(let ,lhs ,rhs)
      `(let ,(alphatize+ lhs) ,(alphatize+ rhs))]
 
     ;; Alphatize defs (w/ param alpha-renaming)
-    [`(def ((ref ,fx) ,args ...) ,body)
-     (define env (hash))
-     (define args+
-       (for/list ([arg (in-list args)])
-         (match arg
-           [`(ref ,x)
-            (define x+ (gensymb x))
-            (set! env (hash-set env x x+))
-            `(ref ,(escape-id-for-C x+))]
-           [`(,ell (ref ,x)) #:when (eq? ell '|...|)
-            (define x+ (gensymb x))
-            (set! env (hash-set env x x+))
-            `(,ell (ref ,(escape-id-for-C x+)))])))
-     `(def ((ref ,(escape-id-for-C fx)) ,@args+)
+    [`(def ((ref ,fx) ,args ...) ,maybe-fail-to ... ,body)
+     (define-values (args+ env) (alphatize-param-list args (hash)))
+
+     (define alphatized-maybe-fail-to
+             (if (null? maybe-fail-to)
+                  '()
+                  (list (alphatize+ (car maybe-fail-to)))))
+     
+     `(def ((ref ,(escape-id-for-C fx)) ,@args+) ,@alphatized-maybe-fail-to
         ,(alphatize+ body env))]
 
     [_ (pretty-print ast)
@@ -130,7 +200,14 @@
   (define noarg-x '_u__noarg)
   (define standard-arg-count (- bless-arg-count 3)) ;; Number of blessed args not including the overflow slice or fallback or arg-count
   
-  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,body) ast)
+  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,maybe-fail-to ... ,body) ast)
+
+  (define maybe-fail-x
+    (if (null? maybe-fail-to)
+      #f
+      (match maybe-fail-to
+        [`((fail_to (ref ,fail-x)))
+          fail-x])))
 
   ;; (ListOf Expr) Int (or Symbol #f) -> (ValuesOf (ListOf Symbol) Lambda)
   ;; Processes def param list to cap the number of params.
@@ -247,8 +324,14 @@
       [`(continue-dispatch ,eas ...)
        `(continue-dispatch ,@(map recur eas))]
 
-      [`(fail ,fail-ref)
-       `(,fail-ref ,@all-sig-params)]
+      [`(fail)
+       (when (not maybe-fail-x)
+         (error 'limit-def-params "Fail expressions (fail) must be inside an enclosing def with a (fail_to (ref failx)) annotation."))
+
+       `((ref ,maybe-fail-x) ,@all-sig-params)]
+
+      [`(closures ,bindings ,body)
+        `(closures ,bindings ,(recur body))]
 
       [`(,ef ,eas ...)
        (define eas+ (map recur eas))
@@ -285,9 +368,11 @@
 ;; Normalizes some simple forms into blessed code and junctures with blessed code
 (define (anf-convert ast)
   
+  ;; Expr -> Expr
   (define (normalize-term ast)
     (normalize ast (λ (x) x)))
 
+  ;; Expr Lambda -> Expr
   (define (normalize ast k)
     (match ast
       [`(ref ,x) (k `(ref ,x))]
@@ -328,6 +413,11 @@
                         (λ (xs)
                           (k `(continue-dispatch ,@xs))))]
 
+      [`(closures (,bindings ...) ,body) ;; Keep these bindings as they are
+        (k 
+          `(closures (,@bindings)
+              ,(normalize-term body)))]
+
       [`(,eas ...)
        (normalize-names eas
                         (λ (xs)
@@ -335,6 +425,9 @@
 
       [_ (error 'normalize-err)]))
 
+  ;; Expr Lambda -> Expr
+  ;; Normalizes the expression to a name which
+  ;; is passed to the kont lambda specifying what to do next.
   (define (normalize-name e0 k)
     (match e0
       [`(,_ ...)
@@ -343,10 +436,14 @@
                     (match e0+
                       [`(ref ,_) (k e0+)]
                       [`(const ,_) (k e0+)]
-		      [`(,ell (ref ,_)) #:when (eq? ell '|...|) (k e0+)]
-                      [_ (let ([tx `(ref ,(gensymb 't))])
+		                  [`(,ell (ref ,_)) #:when (eq? ell '|...|) (k e0+)]
+                      [_
+                        (let ([tx `(ref ,(gensymb 't))])
                            `(let ,tx ,e0+ ,(k tx)))])))]))
 
+  ;; (ListOf Expr) Lambda -> Expr
+  ;; Normalizes the expressions to a list of names
+  ;; which is passed to the kont lambda specifying what to do next.
   (define (normalize-names es k)
     (if (null? es)
         (k '())
@@ -402,7 +499,12 @@
           [`(bless ,e0) (freebless e0)]
           [`(let ,lhs ,rhs ,body)
             (set-union (freevars rhs)
-                  (set-subtract (freevars body) (freevars lhs)))]
+                       (set-subtract (freevars body) (freevars lhs)))]
+          [`(closures ((,xs ,rhss) ...) ,body)
+           (set-subtract
+            (set-union (foldl set-union (set) (map freevars rhss))
+                        (freevars body))
+            (foldl set-union (set) (map freevars xs)))]
           [`(,es ...)
             (foldl set-union (set) (map freevars es))]
           [_ (set)]))
@@ -411,17 +513,18 @@
 		    (set 'unbox_subword 'get_subword_tag)))
 
     (define (lift-cont! x body type rhs)
-      
       (define freelst (set->list (set-remove (free body) x)))
       (define kname (gensymb (sym-append defname type)))
+
       (lift-def! ;; assumes def interface w/ dummy fallback
        `(def ((ref ,kname) (ref ,(gensymb '_)) (ref ,(gensymb '_)) (ref ,x))
-	     ,(foldl
-         (lambda (free-x body+)
-		       `(let (ref ,free-x) (bless ((ref stack_pop)))
-			     ,body+))
-		     (recur body)
-		     freelst)))
+          ,(foldl
+            (lambda (free-x body+)
+              `(let (ref ,free-x) (bless ((ref stack_pop)))
+              ,body+))
+            (recur body)
+            freelst)))
+
       (foldr
         (lambda (free-x body+)
 	       `(let (ref ,(gensymb '_))
@@ -459,7 +562,12 @@
 
       [`(if ,guard ,then ,else) 
        `(if ,guard ,(recur then) ,(recur else))]
+      
       [`(continue-dispatch ,_ ...) ast] 
+
+      [`(closures (,bindings ...) ,body)
+        `(closures (,@bindings)
+          ,(recur body))]
 
       [`((ref ,fx) ,args ...)
        `((ref ,fx) ,@args)]
@@ -481,41 +589,100 @@
     [_ (pretty-print ast) (error 'cps-convert-err)]))
 
 
-(define (simplify-module mod) 
+(define (alphatize-mod mod)
+  (set! global-names (set 'v_equal
+                          '_u_0003d)) ; Unicode name for =
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (set! reserved-bl-x
+      (set-union reserved-bl-x
+        (for/set ([(ast) (in-list inline)])
+          (match ast [`(blessed ((ref ,fx) . ,_) ,_) fx]))))
 
+     (define defs+
+        (for/list ([ast defs]) 
+          (alphatize ast)))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,(for/list ([ast lets]) (alphatize ast))
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (limit-def-params-in-mod mod)
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (define defs+
+        (for/list ([ast defs]) 
+          (limit-def-params ast)))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,lets
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (anf-convert-mod mod)
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (define defs+
+        (for/list ([ast defs]) 
+          (anf-convert ast)))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,(for/list ([ast lets]) (anf-convert ast))
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (cps-convert-mod mod)
+  (match mod
+    [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+     (define defs+
+       (foldr append '() ;; flatten (CPS may emit >1 def for each def)
+	      (for/list ([ast defs]) 
+          (cps-convert ast))))
+
+     `(module ,name ,mtag ,bless ,inline ,blessed
+	      ,lets
+	      ,defs+
+	      ,methods ,types)]))
+
+(define (lower-mod mod)
   (define (lower-stmt ast [return-var #f]) 
     (define (recur ast) (lower-stmt ast return-var))
+
     ;; Flattens CPS code into basic-blocks of blessed 
     (match ast
 
       ;; Assignment to fresh immutable var
       [`(let (ref ,x) (bless ,rhs) ,body)
        `(((ref =) (ref ,x) ,rhs)
-	 ,@(recur body))]
+	       ,@(recur body))]
 
+      ;; Let bound const or ref
       [`(let (ref ,x) ,(and rhs (or `(const ,_) `(ref ,_))) ,body)
        `(((ref =) (ref ,x) ,rhs)
-	 ,@(recur body))]
+	       ,@(recur body))]
 
+      ;; Let bound subword
       [`(let (ref ,x) (subword (ref ,tag) ,e0) ,body)
        `(((ref =) (ref ,x)
-	  ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
-	 ,@(recur body))]
+	                ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
+	       ,@(recur body))]
 
+      ;; Let bound object
       [`(let (ref ,x) (object (ref ,tag) ,es ...) ,body)
        (define rx (gensymb 'a))
        `(((ref =) ((ref |!|) (ref ,rx))
-	  ((ref alloc) (const ,(+ 1 (length es)))))
-	 (do ((ref init_obj) (ref ,rx) (const 0)
-	      ((ref obj_head_word)
-	       (const ,(length es))
-	       (ref ,(sym-append tag "_vtable")))))
-	 ,@(map (lambda (ae i)
-		  `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
-		es
-		(range 1 (add1 (length es))))
-	 ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
-	 ,@(recur body))]
+	                ((ref alloc) (const ,(+ 1 (length es)))))
+	       (do ((ref init_obj) (ref ,rx) (const 0)
+                             ((ref obj_head_word)
+                              (const ,(length es))
+                              (ref ,(sym-append tag "_vtable")))))
+	       ,@(map (lambda (ae i)
+		              `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
+		            es
+		            (range 1 (add1 (length es))))
+	       ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
+	       ,@(recur body))]
 
       ;; Lower List/Slice Literals
       [`(let (ref ,x) (|[]| ,es ...) ,body)
@@ -576,12 +743,13 @@
       [`(let (ref ,x) (if ,g ,t ,e) ,body)
        (define x+ (gensymb x)) ;; lower in-place with x+ as mut join var
        `(,@(lower-stmt `(if ,g ,t ,e) x+)
-        ((ref =) (ref ,x) ((ref freeze) (ref ,x+)))
-        ,@(recur body))]
+         ((ref =) (ref ,x) ((ref freeze) (ref ,x+)))
+         ,@(recur body))]
+      
       [`(if ,g ,t ,e)
        (define g+ (gensymb 'grd))
        `(((ref =) (ref ,g+) ((ref eq) ,g (ref _false)))
-	 (if (ref ,g+) ((ref |{}|) ,@(recur e)) ((ref |{}|) ,@(recur t))))]
+	       (if (ref ,g+) ((ref |{}|) ,@(recur e)) ((ref |{}|) ,@(recur t))))]
       
       ;; Invoke fun-ptr at fallback ptr, then increment and pass fwd
       [`(continue-dispatch ,fallback ,args ...)
@@ -592,6 +760,69 @@
        `(((ref =) (ref ,fun) ((ref deref) ((ref anys_t) ,fallback))) 
          ((ref =) (ref ,fb1) ((ref plus) ((ref manys_t) ,fallback) (const 1)))
          (return ((ref ,fun) (ref ,fb1) ,@args)))]
+
+      ;; Construct closures
+      [`(closures (((ref ,xs) ,(and objs `(object ,_ ...))) ...) ,body)
+      
+        (define-values (alloc-objects-code renamings)
+          (for/fold ([alloc-objects-code (list)]
+                     [renamings (hash)])
+                    ([x (reverse xs)]
+                     [obj (reverse objs)])
+            (match obj
+              [`(object (ref ,tag) ,fvs ...)
+                (define rx (gensymb x))
+
+                (values
+                  (cons
+                    `((ref =) ((ref |!|) (ref ,rx))
+                              ((ref alloc) (const ,(+ 1 (length fvs)))))
+                    alloc-objects-code)
+                  
+                  (hash-set renamings x rx))])))
+       
+       (define (rename-x x)
+        (hash-ref renamings x x))
+       (define (rename-ref ref)
+        (match ref
+          [`(ref ,x)
+           (if (hash-has-key? renamings x)
+               ;; x must be a closure: rename, freeze, and tag
+               ;; TODO: do we need to freeze here?
+               `((ref u64bit_or) ((ref freeze) (ref ,(rename-x x))) (const 1))
+               `(ref ,x))]))
+      
+       (define init-objects-code
+        (foldr append '() ;; flatten one level
+          (for/list ([x xs]
+                    [obj objs])
+            (match obj
+              [`(object (ref ,tag) ,fvs ...)
+                (define rx (rename-x x))
+                (define r-fvs (map rename-ref fvs))
+
+                ;; Head word + fvs
+                `((do ((ref init_obj) (ref ,rx) (const 0)
+                                      ((ref obj_head_word)
+                                      (const ,(length r-fvs))
+                                      (ref ,(sym-append tag "_vtable")))))
+                  
+                  ,@(map (lambda (fv i)
+                          `(do ((ref init_obj) (ref ,rx) (const ,i) ,fv)))
+                        r-fvs
+                        (range 1 (add1 (length r-fvs)))))]))))
+
+       (define freeze-objects-code
+        (for/list ([x xs]
+                   [obj objs])
+          (define rx (rename-x x))
+          `((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))))
+
+       `(,@alloc-objects-code
+         ,@init-objects-code
+         ,@freeze-objects-code
+
+         ,@(recur body))]
 
       ;; Return to current continuation
       [`(return ,ae) #:when return-var ;; local var cont
@@ -614,25 +845,11 @@
     (match ast
       [`(def ((ref ,fx) ,args ...) ,body)
         `(blessed ((ref ,fx) ,@args) ((ref |{}|) ,@(lower-stmt body)))]))
-  
-  (set! global-names (set 'v_equal
-                          '_u_0003d)) ; Unicode name for =
+
   (match mod
     [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
-     (set! reserved-bl-x
-      (set-union reserved-bl-x
-        (for/set ([(ast) (in-list inline)])
-          (match ast [`(blessed ((ref ,fx) . ,_) ,_) fx]))))
-
-     (define defs+	 ;; Simplify core code: Alpha -> ANF -> CPS 
-       (foldr append '() ;; flatten (CPS may emit >1 def for each def)
-	      (for/list ([ast defs]) 
-          (cps-convert (anf-convert (limit-def-params (alphatize ast)))))))
-
      ;; Use helpers just above to lower these defs to blessed code
-     `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs+) blessed)
-	      ,(for/list ([ast lets]) (anf-convert (alphatize ast)))
-	      ,defs+
+     `(module ,name ,mtag ,bless ,inline ,(append (map def->blessed defs) blessed)
+	      ,lets
+	      ,defs
 	      ,methods ,types)]))
-
-

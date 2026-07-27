@@ -53,7 +53,7 @@ def (+ `[_slice ,s1] `[_slice ,s2])
   let n2 = (bless (_slice_len s2))
     (bless (slice_concat s1 n1 s2 n2))
 
-def (+ ,empty x) x
+def (+ ,empty x) x ;; TODO: this is probably unsafe
 def (+ x=`[_slice ,_] ,empty) x
 
 

@@ -1,0 +1,11 @@
+
+;; Results in an infinite loops since ,val patterns generate method calls to =
+
+let a `[obj]
+def (= ,a `[obj]) true
+
+def (do_something ,a) "Doing something"
+def (do_something a) "Doing something else"
+
+def (main)
+  (debug_print (write (do_something 6)))

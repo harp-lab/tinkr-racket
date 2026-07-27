@@ -7,15 +7,23 @@
 
   (define debug-mode (make-parameter #f))
   (define separate-logs (make-parameter #f))
+  (define no-lto (make-parameter #f))
+  (define no-opt (make-parameter #f))
+  (define no-strict-aliasing (make-parameter #f))
+  (define show-flags (make-parameter #f))
   (define test-file
     (command-line #:program "test.rkt"
                   #:once-each [("-d" "--debug") "Run in debug mode" (debug-mode #t)]
                   #:once-each [("-s" "--separate-logs") "Separate log files by thread" (separate-logs #t)]
+                  #:once-each [("--no-lto") "Don't pass lto flags to C++ compiler." (no-lto #t)]
+                  #:once-each [("--no-opt") "Don't pass -O2 flag to C++ compiler." (no-opt #t)]
+                  #:once-each [("--no-strict-aliasing") "Pass strict aliasing flag to C++ compiler." (no-strict-aliasing #t)]
+                  #:once-each [("--show-flags") "Print flags passed to the C++ compiler." (show-flags #t)]
                   #:args (filename)
                   filename))
 
   (void (system "rm -rf /tmp/ti")) ;; optional
 
   (if test-file
-    (build-project test-file (debug-mode) (separate-logs))
+    (build-project test-file (build-options (debug-mode) (separate-logs) (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags)))
     (error "No test file specified.")))

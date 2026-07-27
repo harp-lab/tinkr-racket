@@ -24,7 +24,7 @@ int main(int argc, char** argv)
   many alloc_bk = (many)((many*)alloc_fr + 128);
   many stack_fr = (many)GC_MALLOC(1024*1024*sizeof(many));
   
-  ((many*)stack_fr)[0] = (many)(blessed_t)_main_kont;
+  stack_store_blessed(stack_fr, 0, _main_kont);
   stack_fr = (many)(((many*)stack_fr) + 1);
 
   // Jump into the compiled blessed-code entry point

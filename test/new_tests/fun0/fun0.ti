@@ -4,14 +4,14 @@ def (tinkr_add a b)
 
 ;; A blessed function is an already compiled low-level IR function
 ;; _raw__identity is an encoded name we can ref from outside as raw_identity
-blessed (_raw__identity _fb x)
+blessed (_raw__identity _fb _arg_count x)
 {
   ;; Manually writing a blessed-IR function that is callable
   ;; from tinkr and usable as a value is possible w/ an idiom. E.g.,
  
   ;; CPS for:  return x
   kfun = (stack_pop)
-  return (kfun 0 x)
+  return (kfun 0 0 x)
 }
 
 def (main)

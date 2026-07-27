@@ -1,7 +1,8 @@
 #lang racket
 
 (require "utils.rkt"
-         "langs.rkt")
+         "langs.rkt"
+         "helpers.rkt")
 
 (provide desugar-module)
 
@@ -213,7 +214,7 @@
 
       ;; Normal loop call:
       [else
-        `((ref ,f-x) (ref ,fallback-x) ,@(map desugar-ast params))]))
+        `((ref ,f-x) (ref ,fallback-x) (bless (const ,(length params))) ,@(map desugar-ast params))]))
 
   ;; `(ref ,Symbol) (ListOf Patterns) DesugaredExpr (or Symbol #f) (ListOf UndesugaredExpr) DesugaredExpr Int -> DesugaredExpr
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`) which should be a slice
@@ -270,7 +271,7 @@
 
         ;; TODO: need inner defs to make nested ... work
         (define loop-def
-          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params)
+          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params) (fail_to (ref ,fail-x))
             (if ((ref is_empty) (ref none) (bless (const 1)) (ref ,x-slice))
               ,body
 
@@ -464,8 +465,8 @@
        ;; sig-params are the param names that will be matched on
        (define-values (sig-params arity has-unsplice body-binder) (process-params params))
        
-       ;; A special expression form (removed later on) encoding what to do if the patterns don't match: call the next def (i.e. failx)
-       (define fail-e `(fail (ref ,failx)))
+       ;; A special expression form (removed later on) that tells a later pass that we need to fail here
+       (define fail-e `(fail))
 
        ;; Main body with pattern matching checks
        (define pattern-checks-body
@@ -490,7 +491,7 @@
        ;; Call desugar-ast on each param in the case there is a (ref ...) that needs the ref removed
        (define desguared-sig-params (map desugar-ast sig-params))
 
-       `(def ((ref ,name) (ref ,fallback-x) (ref ,arg-count-x) ,@desguared-sig-params)
+       `(def ((ref ,name) (ref ,fallback-x) (ref ,arg-count-x) ,@desguared-sig-params) (fail_to (ref ,failx))
           ,final-body)]))
   
   ;; The main desugarer
@@ -510,15 +511,15 @@
        (desugar-ast e0 (- qd 1))]
 
       ;; Lift constants out (fixint sized integers)
+      ;; first none is for the fallback as this is an external call
+      ;; second none here is idiom to avoid dispatch on naked values
+      ;; the second argument is the arg count
       [`(const ,(? integer? z))
        #:when (< (- 0 (expt 2 48)) z (expt 2 48))
-       ;; first none is for the fallback as this is an external call
        `((ref _init_from_s64) (ref none) (bless (const 2)) (ref none) (bless (const ,z)))]
       [`(const ,(? integer? z))
-       ;; first none is for the fallback as this is an external call
        `((ref _init_from_int_cstr) (ref none) (bless (const 2)) (ref none) (bless (const ,(~s (~a z)))))]
       [`(const ,(? string? s))
-       ;; second none here is idiom to avoid dispatch on naked values
        `((ref _init_from_cstr) (ref none) (bless (const 2)) (ref none) (bless (const ,(~s s))))]
       
       ;; Quoted sub-word values
@@ -621,6 +622,10 @@
       
       ;; Bless expression
       [`(bless ,es ...) `(bless ,@es)]
+      
+      ;; Inner def
+      [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more) ;; TODO: enforce that maybe-when is only of size 0-1
+        (desugar-inner-def ast)]
 
       ;; Untagged application
       [`(,ef ,es ...)
@@ -640,6 +645,91 @@
       ;; Otherwise error
       [_ (pretty-print ast) (error 'desugar-ast-err)]))
   
+  ;; (ListOf Expr) -> (HashOf Symbol (ListOf Expr))
+  ;; Partition the list of defs by their name.
+  (define (part-defs-by-name defs)
+    (for/fold ([defs-by-name (hash)])
+              ([def defs])
+      (match def
+        [`(def ((ref ,x) ,_ ...) ,_ ...)
+          (define def-group (hash-ref defs-by-name x '()))
+          (hash-set defs-by-name x (append def-group (list def)))])))
+
+  ;; (HashOf Symbol (ListOf Expr)) -> (ValuesOf (ListOf (ListOf Expr)) (HashOf Symbol Symbol))
+  ;; Desugar and link the defs in each group. Returns a list of groups of defs.
+  ;; Also, returns a renaming map which maps the first def's new name to the original name.
+  (define (desugar-and-link-defs defs-by-name)
+    (for/fold ([def-groups (list)]
+               [def-renamings (hash)])
+              ([(def-name defs) (in-hash defs-by-name)])
+      (define first-def-name (gensymb def-name))
+
+      ;; Desugar each def
+      (define-values (defs+ new-def-x)
+        (for/fold ([defs+ (list)]
+                   [new-def-x first-def-name])
+                  ([def defs])
+          (match def
+            [`(def ((ref ,x) ,_ ...) ,_ ...)
+                (define next-def-x (gensymb x))
+                (values (append defs+
+                                (list (desugar-one-def new-def-x next-def-x def)))
+                        next-def-x)])))
+
+      ;; Insert a last def which falls back to try the outer scope
+      (define args-rest-x (gensymb 'args_rest))
+      (define last-def+
+        `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
+            ,(desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))))
+
+      (values
+        (cons
+          (append defs+ (list last-def+))
+          def-groups)
+        (hash-set def-renamings first-def-name def-name))))
+
+  ;; Expr -> Expr
+  (define (desugar-inner-def def-ast)
+    ;; Unnest the nested sibling defs
+    (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
+
+    ;; Group defs by their name
+    (define defs-by-name (part-defs-by-name defs))
+
+    ;; Desugar and link the defs in each group
+    ;; def-renamings maps the first def's new name to the original name
+    (define-values (def-groups def-renamings) (desugar-and-link-defs defs-by-name))
+
+    ;; Expr -> Expr
+    ;; These lets are to ensure that the inner defs shadow any outer defs
+    ;; (They will end up being removed during alphatization)
+    (define (add-renaming-lets body)
+      (for/fold ([body body])
+                ([(first-def-name main-name) (in-hash def-renamings)])
+        `(let (ref ,main-name) (ref ,first-def-name)
+            ,body)))
+
+    ;; Flatten the groups into a list and add the renaming lets
+    (define all-defs
+      (for/fold ([all-defs (list)])
+                ([def-group def-groups])
+        
+        ;; Add the renaming lets to all the defs except the last one
+        ;; (since the last def should refer to the outer scope)
+        (define new-defs
+          (append
+            (for/list ([def (drop-right def-group 1)])
+              (match def
+                [`(def ,param-list ,maybe-fail-to ... ,body)
+                 `(def ,param-list ,@maybe-fail-to
+                    ,(add-renaming-lets body))]))
+            (list (last def-group))))
+        
+        (append new-defs all-defs)))
+
+    ;; Splices/nests the defs back together with `rest-ast` at the center
+    (nest-sibling-defs all-defs (add-renaming-lets (desugar-ast rest-ast))))
+
   ;; returns an obj tag if its an obj pat, or #f if not
   (define (object-method-pat? pat [qd 0])
     (define (recur? pat) (object-method-pat? pat qd))

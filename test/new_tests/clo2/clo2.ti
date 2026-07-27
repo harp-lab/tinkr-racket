@@ -1,0 +1,29 @@
+
+def (is_even x)
+  0
+
+def (is_odd x)
+  1
+
+def (main)
+  def (is_even x)
+    if (= x 0) true
+    if (= x 1) false
+    (is_odd (- x 1))
+  def (is_odd x)
+    if (= x 0) false
+    if (= x 1) true
+    (is_even (- x 1))
+
+  {
+    (debug_print (write (is_even 0)))
+    (debug_print (write (is_odd 0)))
+    (debug_print (write (is_even 1)))
+    (debug_print (write (is_odd 1)))
+    (debug_print (write (is_even 2)))
+    (debug_print (write (is_odd 2)))
+    (debug_print (write (is_even 40)))
+    (debug_print (write (is_odd 40)))
+    (debug_print (write (is_even 43)))
+    (debug_print (write (is_odd 43)))
+  }
