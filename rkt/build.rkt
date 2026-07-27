@@ -3,7 +3,8 @@
 
 (provide setup-build-workspace
 	 read-all-inline
-	 build-project)
+	 build-project
+   (struct-out build-options))
 
 
 (require "parser.rkt"
@@ -151,7 +152,7 @@
           (loop (remove result running))))))
 
 
-(define (build-project path [debug #t] [separate-logs #f])
+(define (build-project path options)
 
   (define project (setup-build-workspace path))
 
@@ -161,7 +162,7 @@
 
   ;; Launch ~7 independent racket processes
   ;; These tackle the initial per-module compilation
-  (define ti-comp-threads (compile-all-parallel separate-logs))
+  (define ti-comp-threads (compile-all-parallel (build-options-separate-logs? options)))
   (wait-on-all-threads ti-comp-threads)
 
   ;; Compile an init module for globals
@@ -190,14 +191,14 @@
 		   (path->string (build-path entry (format "~a.cpp" name)))
 		   (path->string (build-path project "header.h"))
 		   (path->string (build-path entry (format "~a.o" name)))
-       debug)
+       options)
 		  #f)))
 
   ;; Wait for all threads to finish
   (wait-on-all-threads cpp-comp-threads)
 
   ;; Build final executable to /tmp/ti/out.bin
-  (link-and-build-bin project)
+  (link-and-build-bin project options)
   
   (void))
 
