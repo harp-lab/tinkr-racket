@@ -99,7 +99,7 @@ blessed (_apply_on_slice f arg_count arg0 arg1 arg2 arg3 rest_args)
   ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
   if (bl_slice_empty rest_args)
   {
-    do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 _u__noarg _u__noarg)
+    do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 _u__noarg _u__noarg)
     return 0
   }
   {
@@ -107,11 +107,11 @@ blessed (_apply_on_slice f arg_count arg0 arg1 arg2 arg3 rest_args)
     r0 = (bl_slice_rest rest_args)
     if (bl_slice_empty r0)
     {
-      do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 a0 _u__noarg)
+      do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 a0 _u__noarg)
       return 0
     }
     {
-      do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 a0 r0)
+      do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 a0 r0)
       return 0
     }
   }
@@ -124,7 +124,7 @@ blessed (_raw__apply f a0 a1 a2 a3 a4 r4)
   r4_length = (_slice_len r4_ptr)
 
   ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)((u64)5 + (u64)$1), $2, $3, $4, $5, $6, $7)" f r4_length a0 a1 a2 a3 a4 r4)
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)((u64)5 + (u64)$1), $2, $3, $4, $5, $6, $7)" f r4_length a0 a1 a2 a3 a4 r4)
   return 0
 }
 
@@ -157,7 +157,7 @@ blessed (_raw__apply__with__fallback f fallback a0 a1 a2 a3 r3)
   r4_length = (_slice_len r4_ptr)
   r4_slice = (u64bit_or 2 r4_ptr) ;; Retag as a slice
 
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, $1, (any)((u64)5 + (u64)$2), $3, $4, $5, $6, $7, (any)$8)" 
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, $1, (any)((u64)5 + (u64)$2), $3, $4, $5, $6, $7, (any)$8)" 
                                                               f fallback r4_length a0 a1 a2 a3
                                                               (deref (anys_t (top61 r3))) ;; get first (a4)
                                                               r4_slice) 

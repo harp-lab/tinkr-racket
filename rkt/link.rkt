@@ -86,7 +86,7 @@
           (define method+ (escape-id-for-C method))
           (define impls
             (map (lambda (impl)
-               (format "(blessed_t)~a" (escape-id-for-C impl)))
+               (format "fn_to_blessed(~a)" (escape-id-for-C impl)))
              (hash-ref all-other-methods (cons method #f) list)))
           (define std-arg "alloc_fr,alloc_bk,stack_fr")
           (define o-arg "a0,a1,a2,a3,a4,a5,a6")
@@ -100,10 +100,10 @@
            (format "const u32 ~a_pos = ~a;\n" method+ i)
            (format "const blessed_t ~a_link[] = {\n~a};\n" method+
                (if (null? impls)
-                   (format "(blessed_t)fail_dispatch_~a" method+)
+                 (format "fn_to_blessed(fail_dispatch_~a)" method+)
                    (string-append
                 (string-join impls ",\n    ")
-                (format ",\n    (blessed_t)fail_dispatch_~a" method+))))
+              (format ",\n    fn_to_blessed(fail_dispatch_~a)" method+))))
            (format "reg_passing AVXRet ~a(~a, ~a)\n{\n~a~a~a}\n\n"
                method+ std-param o-param
                (format "  DBG(\"Method call to ~a (aka ~a): \" ~a);\n" method+ method
@@ -111,8 +111,7 @@
                (format "  AVXRet r = vtable_lookup(~a,a1,(any)(u64)~a_pos,0,0,0,0,0,0);\n"
                    std-arg
                    method+)
-               (format "  tailcall ~a(~a,~a_link,~a);\n"
-                   "((blessed_t)r.a0())"
+               (format "  tailcall any_to_blessed(r.a0())(~a,~a_link,~a);\n"
                    std-arg
                    method+
                    o-arg))))
@@ -159,10 +158,10 @@
 				   (define obj-h
 				     (hash-ref method-obj-impl method hash))
 				   (if (hash-has-key? obj-h type)
-				       (format "(blessed_t)~a"
+               (format "fn_to_blessed(~a)"
 					       (escape-id-for-C
 						(hash-ref obj-h type)))
-				       "(blessed_t)fail_locally"))
+               "fn_to_blessed(fail_locally)"))
 				 all-methods-ord)
 			    ",\n    ")))
 		 all-types)
@@ -183,17 +182,17 @@
      (format "reg_passing AVXRet entry_point_init(~a,~a)\n{\n AVXRet r;\n~a~a~a~a}\n"
          "many alloc_fr, many alloc_bk, many stack_fr"
          "any a0, any a1, any a2, any a3, any a4, any a5, any a6, any a7"
-         " ((many*)stack_fr)[0] = (many)(blessed_t)_main_shim;\n"  ;; <-- PUSH SHIM HERE
+         " stack_store_blessed(stack_fr, 0, _main_shim);\n"  ;; <-- PUSH SHIM HERE
          (apply string-append
             (map (lambda (mtag i)
-               (format " ((many*)stack_fr)[~a] = (many)(blessed_t)~a;\n"
+             (format " stack_store_blessed(stack_fr, ~a, ~a);\n"
                    i
                    (format "_entry__point__~a" mtag)))
              all-method-tags
              (range 1 (add1 (length all-method-tags)))))
          (format " stack_fr = (many)((many*)stack_fr + ~a);\n"
              (length all-method-tags))
-         (format " tailcall ((blessed_t)*(many*)stack_fr)(~a,~a);\n"
+         (format " tailcall stack_load_blessed(stack_fr, 0)(~a,~a);\n"
              "alloc_fr,alloc_bk,stack_fr,(any)0,(any)0"
              "(any)0,(any)0,(any)0,(any)0,(any)0,(any)0"))))
   
