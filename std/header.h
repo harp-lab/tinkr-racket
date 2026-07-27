@@ -121,8 +121,12 @@ typedef AVXRet (reg_passing *blessed_t)
     any a5, any a6, any a7
 );
 
-// Safely move blessed function pointers through machine-word storage.
-// This avoids UB-prone object-pointer/function-pointer casts.
+/**
+ * Helpers to handle blessed function pointers being stored in a u64.
+ * This is in order to circumvent the strict pointer aliasing and avoid
+ * undefined behavior with object-pointer/function-pointer casts.
+ */
+
 must_inline u64 blessed_to_bits(blessed_t f)
 {
   static_assert(sizeof(blessed_t) <= sizeof(u64));
@@ -150,6 +154,15 @@ must_inline any blessed_to_any(blessed_t f)
   u64 bits = blessed_to_bits(f);
   asm volatile("" : "+r"(bits) : : "memory");
   return (any)bits;
+}
+
+template <typename Fn>
+must_inline blessed_t fn_to_blessed(Fn f)
+{
+  static_assert(sizeof(Fn) == sizeof(blessed_t));
+  blessed_t out;
+  memcpy(&out, &f, sizeof(out));
+  return out;
 }
 
 must_inline void stack_store_blessed(many stack_fr, s64 idx, blessed_t f)
@@ -193,7 +206,7 @@ must_inline reg_passing AVXRet v_equal(
   if ((u64)a1 == (u64)a2)
   { // Short circuit with _true 
     blessed_t cont = stack_load_blessed(stack_fr, -1);
-    tailcall cont(alloc_fr, alloc_bk, (many)((u64*)stack_fr - 1), 0, (any)1, _true, _u__noarg, _u__noarg, _u__noarg, _u__noarg, _u__noarg);
+    tailcall cont(alloc_fr, alloc_bk, (many)((many*)stack_fr - 1), 0, (any)1, _true, _u__noarg, _u__noarg, _u__noarg, _u__noarg, _u__noarg);
   }
   else // Dispatch to = method
     tailcall _u_0003d(alloc_fr, alloc_bk, stack_fr, 0, a0, a1, a2, a3, a4, a5, a6);
