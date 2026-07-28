@@ -1,6 +1,5 @@
 
 Failing tests (under `/new_tests`):
-- fun2 (inner defs)
 - lambda
 - object_splicing
 - patterns1 (... in non-tail-position)

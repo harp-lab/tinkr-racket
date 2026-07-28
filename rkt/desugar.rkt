@@ -19,6 +19,8 @@
   (define types-st (set))
   (define (register-type! tag) (set! types-st (set-add types-st tag)) tag)
   
+  (define top-level-def-names (set))
+
   (define fallback-x (gensymb 'fallback))
   (define arg-count-x (gensymb 'arg_count))
 
@@ -682,6 +684,19 @@
         `(def ((ref ,new-def-x) (ref ,fallback-x) (ref ,arg-count-x) (|...| (ref ,args-rest-x)))
             ,(desugar-ast `((ref ,def-name) ((ref |...|) (ref ,args-rest-x))))))
 
+      (when (not (set-member? top-level-def-names def-name))
+        (let* ([params (pad-params 2)]
+               [params-rest-x (gensymb 'rest-params)]
+               [ell '|...|]
+               [def-fallback-name (gensymb def-name)])
+          (define fallback-def
+            `(def ((ref ,def-fallback-name) (ref ,fallback-x) ,@params (,ell (ref ,params-rest-x)))
+                (continue-dispatch (ref ,fallback-x) ,@params (ref ,params-rest-x))))
+          
+          (register-method! def-name #f def-fallback-name)
+          (lift-def! def-fallback-name fallback-def)
+          (set! top-level-def-names (set-add top-level-def-names def-name))))
+
       (values
         (cons
           (append defs+ (list last-def+))
@@ -820,6 +835,8 @@
   (match mod
     [`(module ,name ,bless ,all-inline
 	      ,blessed ,lets ,defs)
+
+     (set! top-level-def-names (list->set (map car defs)))
 
      (define defs+
       (foldl (lambda (name defs+) ;; 2. add new/lifted defs

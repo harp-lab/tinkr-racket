@@ -1,8 +1,4 @@
 
-
-def (fact x)
-  false
-
 def (f)
   def (fact 0) 1
   def (fact 1) 1

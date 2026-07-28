@@ -1,10 +1,4 @@
 
-def (is_even x)
-  0
-
-def (is_odd x)
-  1
-
 def (main)
   def (is_even x)
     if (= x 0) true

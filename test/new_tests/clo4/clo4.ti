@@ -1,11 +1,6 @@
 
 ;; ... patterns don't currently work yet
 
-def (f) "error"
-def (is_5) "error"
-def (two_5) "error"
-def (all_5 x) "error"
-
 def (main)
   let a 5
   

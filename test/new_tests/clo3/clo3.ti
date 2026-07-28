@@ -1,17 +1,4 @@
 
-def (is_even x)
-  "error"
-def (is_odd x)
-  "error"
-def (f x)
-  "error"
-def (fact x)
-  "error"
-def (fib x)
-  "error"
-def (g x)
-  "error"
-
 def (map f []) []
 def (map f [x xs ...])
   [(f x) (map f xs) ...]
@@ -20,9 +7,6 @@ def (main)
   def (fact 0) 1
   def (fact 1) 1
   def (fact n) n * (fact n-1)
-
-  def (g x)
-    "error"
 
   def (f x)
     def (fact 2)
