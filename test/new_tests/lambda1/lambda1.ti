@@ -1,0 +1,23 @@
+
+def (map f []) []
+def (map f [x rest ...])
+  [(f x) (map f rest) ...]
+
+def (foldl f acc []) acc
+def (foldl f acc [x rest ...])
+  (foldl f (f x acc) rest)
+
+def (do_work work)
+  (work)
+
+def (main)
+  let lst [1 2 3 4 5]
+  let s 5
+  let work 
+    (lambda () 
+      (foldl
+        (lambda (x acc) (+ x acc))
+        0
+        (map (lambda (x) (* x s)) lst)))
+
+  (debug_print (write (do_work work)))

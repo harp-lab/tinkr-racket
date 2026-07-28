@@ -629,6 +629,22 @@
       [`(def ((ref ,x) ,args ...) ,maybe-when ... ,body ,more) ;; TODO: enforce that maybe-when is only of size 0-1
         (desugar-inner-def ast)]
 
+      ;; Lambda
+      [`(lambda (,xs ...) ,body)
+       (define lam-def-x (gensymb 'lam))
+
+       (define fail-e
+        (desugar-ast `(bless ((ref fatal) (const "\"Lambda pattern failure.\"")))))
+
+       (define inner-def
+        `(def ((ref ,lam-def-x) ,@xs)
+              ,body
+         (def ((ref ,lam-def-x) ((ref |...|) (ref ,(gensymb 'x))))
+              ,fail-e
+         (ref ,lam-def-x)))) ;; Return the inner def as the lambda
+
+       (desugar-ast inner-def qd)]
+
       ;; Untagged application
       [`(,ef ,es ...)
        (define ef+ (desugar-ast ef qd))

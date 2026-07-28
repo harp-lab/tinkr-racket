@@ -1,6 +1,0 @@
-def (main)
-    let x 10
-    let y 20
-    let foo (lambda (x) x + y)
-    let a (foo 30)
-    (debug_print (write a))

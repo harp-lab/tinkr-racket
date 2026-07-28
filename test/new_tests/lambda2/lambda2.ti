@@ -1,0 +1,4 @@
+
+def (main)
+  let a (lambda (`[obj ,a ,b ,c] (? s int)) (* (+ a b c) s))
+  (debug_print (write (a `[obj 1 2 3] 5)))

@@ -414,9 +414,8 @@
                           (k `(continue-dispatch ,@xs))))]
 
       [`(closures (,bindings ...) ,body) ;; Keep these bindings as they are
-        (k 
-          `(closures (,@bindings)
-              ,(normalize-term body)))]
+        `(closures (,@bindings)
+            ,(normalize body k))]
 
       [`(,eas ...)
        (normalize-names eas

@@ -1,0 +1,8 @@
+
+def (main)
+  let a (lambda ((? s int)) s)
+  {
+    (debug_print (write (a 1)))
+    (debug_print (write (a 2)))
+    (debug_print (write (a "3")))
+  }
