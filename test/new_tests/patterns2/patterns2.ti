@@ -3,7 +3,7 @@
 def (nested x [y0 y1] ...)
   y0 + y1
 
-;; Nested patterns like this don't work either
+;; Nested ellipsis patterns
 def (map f [] ...) []
 def (map f [xs lsts ...] ...)
   [(f xs ...) (map f lsts ...) ...]
@@ -13,7 +13,6 @@ def (add x y)
 
 def (main)
 {
-  ;; Failing:
-  (debug_print (write (nested 5 [[5 6] [7 8]])))
-  (debug_print (write (multi_map add [1 2 3 4] [1 2 3 4])))
+  (debug_print (write (nested 5 [5 6] [7 8])))
+  (debug_print (write (map add [1 2 3 4] [1 2 3 4])))
 }

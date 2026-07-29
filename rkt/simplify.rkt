@@ -338,7 +338,7 @@
        (define ef+ (recur ef))
 
        (cond
-        [(or (equal? ef+ '(ref _raw__apply)) (equal? ef+ '(ref _raw__apply__with__fallback))) ; Special cases that don't gather the tail into a slice
+        [(or (equal? ef+ '(ref _raw__apply)) (equal? ef+ '(ref _raw__apply__with__fallback)) (equal? ef+ '(ref _raw__apply__with__fallback__full))) ; Special cases that don't gather the tail into a slice
           `(,ef+ ,@eas+)]
         [(<= (length eas+) (- bless-arg-count 1))
           `(,ef+ ,@eas+)]

@@ -659,7 +659,7 @@
        (define (is-splice? e)
          (match e [`(|...| ,_) #t] [_ #f]))
        (cond
-        [(or (equal? ef+ '(ref raw_apply)) (equal? ef+ '(ref raw_apply_with_fallback))) ; Special cases that don't require a fallback arg
+        [(or (equal? ef+ '(ref raw_apply)) (equal? ef+ '(ref raw_apply_with_fallback)) (equal? ef+ '(ref raw_apply_with_fallback_full))) ; Special cases that don't require a fallback arg
           `(,ef+ ,@es+)]
         [(ormap is-splice? es+)
           (define arg-list (desugar-ast `(|[]| ,@es) qd))

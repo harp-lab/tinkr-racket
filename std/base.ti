@@ -133,25 +133,36 @@ def (_apply_with_fallback f fallback args)
   if (= args empty) (f)
   let a0 = (first args)
   let r0 = (rest args)
-  if (= r0 empty) (raw_apply_with_fallback f fallback a0)
+  if (= r0 empty) (raw_apply_with_fallback f fallback (bless 1) a0)
   
   let a1 = (first r0)
   let r1 = (rest r0)
-  if (= r1 empty) (raw_apply_with_fallback f fallback a0 a1)
+  if (= r1 empty) (raw_apply_with_fallback f fallback (bless 2) a0 a1)
   
   let a2 = (first r1)
   let r2 = (rest r1)
-  if (= r2 empty) (raw_apply_with_fallback f fallback a0 a1 a2)
+  if (= r2 empty) (raw_apply_with_fallback f fallback (bless 3) a0 a1 a2)
   
   let a3 = (first r2)
   let r3 = (rest r2)
-  if (= r3 empty) (raw_apply_with_fallback f fallback a0 a1 a2 a3)
+  if (= r3 empty) (raw_apply_with_fallback f fallback (bless 4) a0 a1 a2 a3)
   
-  (raw_apply_with_fallback f fallback a0 a1 a2 a3 r3)
+  (raw_apply_with_fallback_full f fallback a0 a1 a2 a3 r3)
 
-;; Helper (similar to _raw__apply) to apply f with a fallback argument
-;; r3 must be non-empty
-blessed (_raw__apply__with__fallback f fallback a0 a1 a2 a3 r3)
+;; Two helpers (similar to _raw__apply) to apply f with a fallback argument
+;; Both of these helpers have special exceptions inside the desugar and limit def params phases
+;; to prevent a slice being passed for the last argument.
+
+;; With arg_count and no rest slice
+blessed (_raw__apply__with__fallback f fallback arg_count a0 a1 a2 a3)
+{
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, $1, (any)$2, $3, $4, $5, $6, $7, $8)" 
+                                                              f fallback arg_count a0 a1 a2 a3 _u__noarg _u__noarg) 
+  return 0
+}
+
+;; We have a rest slice r3 which must be non-empty
+blessed (_raw__apply__with__fallback__full f fallback a0 a1 a2 a3 r3)
 {
   r4_ptr = (any_t (plus (anys_t (top61 r3)) 1)) ;; get rest (r4)
   r4_length = (_slice_len r4_ptr)
