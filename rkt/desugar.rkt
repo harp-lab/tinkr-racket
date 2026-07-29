@@ -236,11 +236,12 @@
         (define pvs (set->list (gather-pattern-variables pat qd))) ; Pick an (arbitrary) order by converting to a list
         (define pv-refs (map (lambda (pv) `(ref ,pv)) pvs))
 
+        (define pvs^ (map gensymb pvs))
         (define renaming
-          (for/hash ([pv pvs])
-            (values pv (gensymb pv))))
+          (for/hash ([pv pvs]
+                     [pv^ pvs^])
+            (values pv pv^)))
         (define renamed-pat (rename-pattern-variables pat renaming qd))
-        (define pvs^ (hash-values renaming))
 
         (define desguared-sig-params (map desugar-ast sig-params))
 
@@ -261,31 +262,37 @@
         (define x-slice (gensymb 'x_slice))
         (define x-elm (gensymb 'x_elm))
         
+        (define loop-fallback-x (gensymb 'fallback))
+
         (define enter-loop-e
-          (construct-application-with-fallback loop-x fallback-x (append (list x) initial-accs sig-params)))
+          (construct-application-with-fallback loop-x loop-fallback-x (append (list x) initial-accs)))
         (define recur-loop-e
-          (construct-application-with-fallback loop-x fallback-x (append (list `((ref rest) (ref ,x-slice))) update-accs sig-params)))
+          (construct-application-with-fallback loop-x loop-fallback-x (append (list `((ref rest) (ref ,x-slice))) update-accs)))
 
         (define loop-fail-e
           (if fail-x
               (construct-application-with-fallback fail-x fallback-x sig-params)
               fail-e))
 
-        ;; TODO: need inner defs to make nested ... work
+        (define body+
+          (match body
+            [`(if ,g ,b (fail))
+             `(if ,g ,b ,loop-fail-e)]
+            [_ body]))
+
         (define loop-def
-          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs ,@desguared-sig-params) (fail_to (ref ,fail-x))
+          `(def ((ref ,loop-x) (ref ,loop-fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs)
             (if ((ref is_empty) (ref none) (bless (const 1)) (ref ,x-slice))
-              ,body
+              ,body+
 
               (let (ref ,x-elm) ((ref first) (ref none) (bless (const 1)) (ref ,x-slice))
                 ,(desugar-pat `(ref ,x-elm) renamed-pat loop-fail-e fail-x sig-params
                     recur-loop-e
-                    qd)))))
-
-        (lift-def! loop-x loop-def)
+                    qd)))
+            ,enter-loop-e))
 
         `(if ((ref is_slice) (ref none) (bless (const 1)) ,x)
-          ,enter-loop-e
+          ,loop-def
           ,fail-e)]
       
       [(cons e0 es)

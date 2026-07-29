@@ -11,6 +11,7 @@
   (define no-opt (make-parameter #f))
   (define no-strict-aliasing (make-parameter #f))
   (define show-flags (make-parameter #f))
+  (define print-cmds (make-parameter #f))
   (define test-file
     (command-line #:program "test.rkt"
                   #:once-each [("-d" "--debug") "Run in debug mode" (debug-mode #t)]
@@ -19,11 +20,12 @@
                   #:once-each [("--no-opt") "Don't pass -O2 flag to C++ compiler." (no-opt #t)]
                   #:once-each [("--no-strict-aliasing") "Pass strict aliasing flag to C++ compiler." (no-strict-aliasing #t)]
                   #:once-each [("--show-flags") "Print flags passed to the C++ compiler." (show-flags #t)]
+                  #:once-each [("--print-cmds") "Print the commands that the compiler runs" (print-cmds #t)]
                   #:args (filename)
                   filename))
 
   (void (system "rm -rf /tmp/ti")) ;; optional
 
   (if test-file
-    (build-project test-file (build-options (debug-mode) (separate-logs) (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags)))
+    (build-project test-file (build-options (debug-mode) (separate-logs) (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags) (print-cmds)))
     (error "No test file specified.")))

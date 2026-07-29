@@ -4,6 +4,7 @@
 (provide setup-build-workspace
 	 read-all-inline
 	 build-project
+   wait-on-all-threads
    (struct-out build-options))
 
 
@@ -156,6 +157,8 @@
 
   (define project (setup-build-workspace path))
 
+  (set-options! options)
+
   ;; Cleanup stale parts of the build
   (run-cmd (find-executable-path "sh") "-c"
        "rm -f /tmp/ti/build/*/*/*.cpp /tmp/ti/build/*/*/*.h /tmp/ti/build/*/*/*.core /tmp/ti/build/*/*/*.bl /tmp/ti/build/*/*/*.o")  
@@ -190,15 +193,14 @@
 		  (compile-cpp-to-object
 		   (path->string (build-path entry (format "~a.cpp" name)))
 		   (path->string (build-path project "header.h"))
-		   (path->string (build-path entry (format "~a.o" name)))
-       options)
+		   (path->string (build-path entry (format "~a.o" name))))
 		  #f)))
 
   ;; Wait for all threads to finish
   (wait-on-all-threads cpp-comp-threads)
 
   ;; Build final executable to /tmp/ti/out.bin
-  (link-and-build-bin project options)
+  (link-and-build-bin project)
   
   (void))
 

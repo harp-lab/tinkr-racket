@@ -8,6 +8,7 @@
          link-and-build-bin
          build-error-chan
          run-cmd
+         set-options!
          (struct-out build-options))
 
 
@@ -24,12 +25,17 @@
    lto?
    opt?
    no-strict-aliasing?
-   show-flags?]
+   show-flags?
+   print-cmds?]
   #:transparent)
 
 ;; A helper human-readable tag for the error file produced
 ;; by run-cmd. Can be set!ed before calling run-cmd.
 (define error-file-tag "")
+
+(define options #f)
+(define (set-options! opts)
+  (set! options opts))
 
 (define null-device-path
   (if (eq? (system-type) 'windows) "NUL" "/dev/null"))
@@ -128,6 +134,9 @@
 
 
 (define (run-cmd prog . args)
+  (when (build-options-print-cmds? options)
+    (displayln (format "~a ~a" prog (string-join args " "))))
+  
   (define log-port (open-output-file
         (build-path (format "/tmp/ti/error~a.log" error-file-tag))
 		    #:exists 'append))
@@ -151,7 +160,7 @@
       (unless c++-attempt (error "Error: neither clang++ nor c++ not found in PATH."))
       `(c++ ,c++-attempt)]))
 
-(define (compile-cpp-to-object cpp-path header-path obj-path options)
+(define (compile-cpp-to-object cpp-path header-path obj-path)
   (spawn-safe
    (lambda ()
      (match-define `(,cxx-type ,cxx-path) (find-cxx-path))
@@ -185,7 +194,7 @@
         #t))))
 
 
-(define (compile-objects-to-bin project-path options
+(define (compile-objects-to-bin project-path
 				[out-path "/tmp/ti/out.bin"])
   (define cxx-path (or (find-executable-path "clang++") 
                        (find-executable-path "c++")))
@@ -216,11 +225,11 @@
          (append link-flags obj-files)))
 
 
-(define (link-and-build-bin project-path options)
+(define (link-and-build-bin project-path)
   (define local-bin (build-path project-path "out.bin"))
   (define global-bin "/tmp/ti/out.bin")
 
-  (compile-objects-to-bin project-path options (path->string local-bin))
+  (compile-objects-to-bin project-path (path->string local-bin))
 
   (when (file-exists? global-bin)
     (delete-file global-bin))

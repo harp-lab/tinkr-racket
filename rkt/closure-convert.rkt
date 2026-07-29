@@ -170,6 +170,7 @@
     ;; Untagged application
     [`((ref ,fx) ,fallback ,arg-count ,es ...)
       (define-values (fx-expr fx-defs fx-free) (clo-convert-ast `(ref ,fx)))
+      (define-values (_f-expr _f-defs fallback-free) (clo-convert-ast fallback))
       (define-values (new-es es-defs es-free)
         (for/foldr ([new-es (list)]
                     [defs (set)]
@@ -193,7 +194,7 @@
       (values
         app-expr
         (set-union fx-defs es-defs)
-        (set-union fx-free es-free))]))
+        (set-union fx-free fallback-free es-free))]))
 
 
 ;; Expr -> (ValuesOf Expr (SetOf Expr) (SetOf Variable))
@@ -256,9 +257,20 @@
                   updated-chains ;; Extended an existing chain
                   (set-add chains (list fx maybe-fail-x)))] ;; Otherwise, start new chain
             
-            ;; This def's name (i.e. fx) will have already been added to a chain
+            ;; Either this def's name (i.e. fx) will have already been added to a chain or this def's
+            ;; name will be start a new singleton chain
             ;; (this must be the last def in the chain since it doesn't have a fail-to)
-            [else chains])])))
+            [else
+              (define found-in-chain
+                (for/first ([chain chains]
+                            #:when (equal? (last chain) fx))
+                  #t))
+
+              ;; If this def is at the end of the chain then we are done with this chain (so do nothing).
+              ;; Otherwise add the def to a new singleton chain.
+              (if found-in-chain
+                  chains
+                  (set-add chains (list fx)))])])))
 
   ;; Closure convert def bodies and find free vars for each def group
   (define-values (def-groups lifted-defs-from-bodies)
