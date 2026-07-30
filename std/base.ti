@@ -67,6 +67,37 @@ blessed (get_object_slice x)
 	_empty
 	(u64plus 2 (plus 1 (anys_t (top61 x)))))
 
+;; MutableObject UntaggedInt Slice -> UntaggedInt
+;; Initalizes the given object `mut_obj` with the values in `vals`.
+;; Returns an updated index.
+blessed (init_obj_from_slice mut_obj curr_i vals)
+{
+  do ("DBG(\"CALL TO INIT OBJ FROM SLICE\")")
+  do ("DBG(\"args: \" << DBG_VALUE($0) << DBG_VALUE($1) << DBG_VALUE($2))" mut_obj curr_i vals)
+  if (eq vals _empty)
+  {
+    do ("DBG(\"empty case 1: \" << DBG_VALUE($0))" vals)
+    return curr_i
+  }
+  {
+    val = (deref (anys_t (top61 vals)))
+    do ("DBG(\"val: \" << DBG_VALUE($0))" val)
+    if (u64bit_or (eq 0 val) (eq 255 (u64bit_and 255 val)))
+    {
+      do ("DBG(\"empty case 2: \" << DBG_VALUE($0))" val)
+      return curr_i
+    }
+    {
+      do ("DBG(\"not empty: \" << DBG_VALUE($0))" val)
+      do (init_obj mut_obj curr_i val)
+
+      the_rest = (plus (anys_t (top61 vals)) 1)
+      new_i = (plus (u64_t curr_i) 1)
+      return (init_obj_from_slice mut_obj new_i the_rest)
+    }
+  }
+}
+
 
 ;; Runtime trampoline for dynamically spliced function calls
 def (_apply f args)

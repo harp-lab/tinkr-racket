@@ -645,6 +645,7 @@
 	      ,methods ,types)]))
 
 (define (lower-mod mod)
+  ;; Lowers the given AST (a function's body) into blessed code.
   (define (lower-stmt ast [return-var #f]) 
     (define (recur ast) (lower-stmt ast return-var))
 
@@ -664,24 +665,156 @@
       ;; Let bound subword
       [`(let (ref ,x) (subword (ref ,tag) ,e0) ,body)
        `(((ref =) (ref ,x)
-	                ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
+                  ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
+        ,@(recur body))]
+
+      ;; OLD
+      #;[`(let (ref ,x) (object (ref ,tag) ,es ...) ,body)
+       (define rx (gensymb 'a))
+
+       ;; Allocate (mutable) space for the object
+       `(((ref =) ((ref |!|) (ref ,rx))
+            ((ref alloc) (const ,(+ 1 (length es)))))
+        
+         ;; Init the object with data:
+         ;; First datum: the vtable?
+         (do ((ref init_obj) (ref ,rx) (const 0)
+              ((ref obj_head_word)
+              (const ,(length es))
+              (ref ,(sym-append tag "_vtable")))))
+        
+         ;; The rest: the user supplied data
+         ,@(map (lambda (ae i)
+                  `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
+                es
+                (range 1 (add1 (length es))))
+
+         ;; Make immutable
+         ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
 	       ,@(recur body))]
 
       ;; Let bound object
       [`(let (ref ,x) (object (ref ,tag) ,es ...) ,body)
-       (define rx (gensymb 'a))
-       `(((ref =) ((ref |!|) (ref ,rx))
-	                ((ref alloc) (const ,(+ 1 (length es)))))
-	       (do ((ref init_obj) (ref ,rx) (const 0)
-                             ((ref obj_head_word)
-                              (const ,(length es))
-                              (ref ,(sym-append tag "_vtable")))))
-	       ,@(map (lambda (ae i)
-		              `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
-		            es
-		            (range 1 (add1 (length es))))
-	       ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
-	       ,@(recur body))]
+
+       ;; Symbol List Symbol -> (ValuesOf Expr Symbol)
+       (define (add-elems-directly target-x elems index-x)
+         (define new-index (gensymb 'inx))
+         (values
+          `(;; Initalize the object with elems
+            ,@(for/list ([e elems]
+                         [i (in-naturals)]) ;; Start at 0, assume index has already been incremented
+                  `(do ((ref init_obj) (ref ,target-x) ((ref plus) (const ,i) ((ref u64_t) (ref ,index-x))) ,e)))
+            
+            ;; Update the index
+            ((ref =) (ref ,new-index) ((ref plus) (const ,(length elems)) ((ref u64_t) (ref ,index-x)))))
+          
+          new-index))
+
+       ;; Symbol Symbol Symbol -> (ValuesOf Expr Symbol)
+       (define (add-elems-from-slice target-x slice-x index-x)
+         (define new-index (gensymb 'inx))
+         (values
+          ;; init_obj_from_slice returns an updated index
+          `(((ref =) (ref ,new-index)
+                     ((ref init_obj_from_slice) (ref ,target-x) (ref ,index-x) (ref ,slice-x))))
+
+          new-index))
+       
+       ;; Symbol Symbol -> (ValuesOf Expr Symbol)
+       ;; Adds the length of the slice to the len-x accumulator.
+       (define (accumulate-length len-x slice-x)
+        (define new-len-x (gensymb 'len))
+        (define inter (gensymb 'inter))
+        (values
+          `(((ref =) (ref ,inter)
+                     ((ref slice_len) ((ref top61) (ref ,slice-x))))
+            ((ref =) (ref ,new-len-x)
+                     ((ref plus) ((ref u64_t) (ref ,len-x))
+                                 ((ref u64_t) (ref ,inter)))))
+          
+          new-len-x))
+
+       ;; Split into chunks: [lst1 ... elm1 elm2 lst2 ...] => [lst1 [elm1 elm2] lst2]
+       (define-values (all-chunks last-chunk)
+         (for/fold ([chunks '()]
+                    [curr-chunk '()])
+                   ([e (in-list es)])
+           (match e
+             [`(,ell (ref ,slice-x)) #:when (eq? ell '|...|)
+              (if curr-chunk
+                  (values (append chunks (list (reverse curr-chunk) slice-x)) '())
+                  (values (append chunks (list slice-x)) '()))]
+             
+             [_ (values chunks (cons e curr-chunk))])))
+
+       (define final-chunks 
+         (if (null? last-chunk) 
+             all-chunks
+             (append all-chunks (list (reverse last-chunk)))))
+
+       (define mut-x (gensymb 'a))
+       (define initial-index-x (gensymb 'init_idx))
+       (define initial-len-x (gensymb 'init_len))
+
+       ;; `code`: Generated code for populating the object with user supplied
+       ;; data starting at the initial index.
+       ;; `slice-lens-code`: Generated code for accumulating the length of all
+       ;; the slices being spliced together.
+       ;; `last-len-x`: The name of the accumulated length variable.
+       ;; `inline-vals-len`: The number of inline elements (i.e not part of a slice).
+       (define-values (code _last-index slice-lens-code last-len-x inline-vals-len)
+          (for/fold ([code '()]
+                     [curr-index-x initial-index-x]
+                     [slice-lens-code '()]
+                     [len-x initial-len-x]
+                     [inline-vals-len 0])
+                    ([chunk final-chunks])
+              (cond
+                [(list? chunk) ;; Normal inline values (chunk is a list of inline values)
+                  (define-values (res-code new-i) (add-elems-directly mut-x chunk curr-index-x))
+                  (values (append code res-code)
+                          new-i
+                          slice-lens-code
+                          len-x
+                          (+ inline-vals-len (length chunk)))]
+                [else ;; Splicing (chunk contains the name for the slice)
+                  (define-values (res-code new-i) (add-elems-from-slice mut-x chunk curr-index-x))
+                  (define-values (res-code-len new-len-x) (accumulate-length len-x chunk))
+
+                  (values (append code res-code)
+                          new-i
+                          (append slice-lens-code res-code-len)
+                          new-len-x
+                          inline-vals-len)])))
+
+       (append
+        `(;; Calculate length of the object
+          ((ref =) (ref ,initial-len-x) (const ,(+ inline-vals-len 1))) ;; plus 1 for the extra 0th word
+          ,@slice-lens-code
+          ;; Now `last-len-x` contains the length of the object
+
+          ;; Allocate (mutable) space for the object
+          ((ref =) ((ref |!|) (ref ,mut-x))
+                   ((ref alloc) ((ref u64_t) (ref ,last-len-x))))
+
+          ;; Init the object with data:
+          ;; First datum: Q: the vtable?
+          (do ((ref init_obj) (ref ,mut-x) (const 0)
+                ((ref obj_head_word)
+                (const ,(length es))
+                (ref ,(sym-append tag "_vtable")))))
+        
+          ;; The initial index
+          ((ref =) (ref ,initial-index-x) (const 1))
+
+          ;; Populate the object
+          ,@code
+        
+          ;; Make immutable and tag as an object (object tag is 1)
+          ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,mut-x)) (const 1)))
+
+          ;; Continue
+          ,@(recur body)))]
 
       ;; Lower List/Slice Literals
       [`(let (ref ,x) (|[]| ,es ...) ,body)
@@ -694,36 +827,43 @@
            ;; Fill elements starting at index 1
            ,@(for/list ([e elems] [i (in-naturals)])
                `(do ((ref init_obj) (ref ,rx) (const ,(+ 1 i)) ,e)))
-           ((ref =) (ref ,target-x) ;; final value is (rx + 1) | 2
-            ((ref u64bit_or)
-	     ((ref plus) ((ref manys_t) ((ref freeze) (ref ,rx))) (const 1))
-	     (const 2)))))
+          
+           ;; final value is (rx + 1) | 2
+           ;; 2 is the tag for slices
+           ((ref =) (ref ,target-x)
+                    ((ref u64bit_or)
+                      ((ref plus) ((ref manys_t) ((ref freeze) (ref ,rx)))
+                                  (const 1))
+                      (const 2)))))
 
        (define (join-chunks ops)
          (match ops
            ['() `(((ref =) (ref ,x) (ref _empty)))] 
            [`((,_ ... ((ref =) (ref ,last-v) ,_)))
-	    (append (first ops) `(((ref =) (ref ,x) (ref ,last-v))))]
+            (append (first ops) `(((ref =) (ref ,x) (ref ,last-v))))]
            [`(,c1 ,c2 ,rest ...)
             (match-let ([`(,_ ... ((ref =) (ref ,v1) ,_)) c1]
                         [`(,_ ... ((ref =) (ref ,v2) ,_)) c2])
-              (join-chunks (cons (append c1 c2 
-					 `(((ref =) (ref ,(gensymb 'join)) 
-					    ((ref +) (ref none) (bless (const 2)) (ref ,v1) (ref ,v2)))))
-				 rest)))]))
+              (join-chunks
+                (cons (append c1 c2 
+                      `(((ref =) (ref ,(gensymb 'join)) 
+                                 ((ref +) (ref none) (bless (const 2)) (ref ,v1) (ref ,v2)))))
+				              rest)))]))
 
        (define-values (all-chunks last-chunk)
-         (for/fold ([chunks '()] [curr-chunk '()]) ([e (in-list es)])
+         (for/fold ([chunks '()]
+                    [curr-chunk '()])
+                   ([e (in-list es)])
            (match e
-             [`(,ell ,v) #:when (eq? ell '|...|) 
+             [`(,ell ,v) #:when (eq? ell '|...|) ;; This case is unused?
               (define chunk-ops
                 (if (null? curr-chunk)
-		    '()
+		                '()
                     (let ([tv (gensymb 'chk)])
                       (list (make-chunk-ast tv (reverse curr-chunk))))))
-              (define splice-op 
-                (let ([tv (gensymb 'spl)])
-                  `(((ref =) (ref ,tv) ,v))))
+                        (define splice-op 
+                          (let ([tv (gensymb 'spl)])
+                            `(((ref =) (ref ,tv) ,v))))
               
               (values (append chunks chunk-ops (list splice-op)) '())]
              
