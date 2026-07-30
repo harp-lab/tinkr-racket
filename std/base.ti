@@ -72,23 +72,17 @@ blessed (get_object_slice x)
 ;; Returns an updated index.
 blessed (init_obj_from_slice mut_obj curr_i vals)
 {
-  do ("DBG(\"CALL TO INIT OBJ FROM SLICE\")")
-  do ("DBG(\"args: \" << DBG_VALUE($0) << DBG_VALUE($1) << DBG_VALUE($2))" mut_obj curr_i vals)
   if (eq vals _empty)
   {
-    do ("DBG(\"empty case 1: \" << DBG_VALUE($0))" vals)
     return curr_i
   }
   {
     val = (deref (anys_t (top61 vals)))
-    do ("DBG(\"val: \" << DBG_VALUE($0))" val)
     if (u64bit_or (eq 0 val) (eq 255 (u64bit_and 255 val)))
     {
-      do ("DBG(\"empty case 2: \" << DBG_VALUE($0))" val)
       return curr_i
     }
     {
-      do ("DBG(\"not empty: \" << DBG_VALUE($0))" val)
       do (init_obj mut_obj curr_i val)
 
       the_rest = (plus (anys_t (top61 vals)) 1)

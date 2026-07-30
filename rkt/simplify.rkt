@@ -668,31 +668,6 @@
                   ((ref box_subword) ((ref unbox_subword) ,e0) (ref ,tag)))
         ,@(recur body))]
 
-      ;; OLD
-      #;[`(let (ref ,x) (object (ref ,tag) ,es ...) ,body)
-       (define rx (gensymb 'a))
-
-       ;; Allocate (mutable) space for the object
-       `(((ref =) ((ref |!|) (ref ,rx))
-            ((ref alloc) (const ,(+ 1 (length es)))))
-        
-         ;; Init the object with data:
-         ;; First datum: the vtable?
-         (do ((ref init_obj) (ref ,rx) (const 0)
-              ((ref obj_head_word)
-              (const ,(length es))
-              (ref ,(sym-append tag "_vtable")))))
-        
-         ;; The rest: the user supplied data
-         ,@(map (lambda (ae i)
-                  `(do ((ref init_obj) (ref ,rx) (const ,i) ,ae)))
-                es
-                (range 1 (add1 (length es))))
-
-         ;; Make immutable
-         ((ref =) (ref ,x) ((ref u64bit_or) ((ref freeze) (ref ,rx)) (const 1)))
-	       ,@(recur body))]
-
       ;; Let bound object
       [`(let (ref ,x) (object (ref ,tag) ,es ...) ,body)
 
@@ -727,7 +702,7 @@
         (define inter (gensymb 'inter))
         (values
           `(((ref =) (ref ,inter)
-                     ((ref slice_len) ((ref top61) (ref ,slice-x))))
+                     ((ref _slice_len) ((ref top61) (ref ,slice-x))))
             ((ref =) (ref ,new-len-x)
                      ((ref plus) ((ref u64_t) (ref ,len-x))
                                  ((ref u64_t) (ref ,inter)))))
