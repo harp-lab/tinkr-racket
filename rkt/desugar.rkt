@@ -218,6 +218,38 @@
       [else
         `((ref ,f-x) (ref ,fallback-x) (bless (const ,(length params))) ,@(map desugar-ast params))]))
 
+  ;; ast should already be desugared.
+  (define (replace-fails ast replacement)
+    (define (recur ast)
+      (replace-fails ast replacement))
+
+    (match ast
+      [`(fail)
+       replacement]
+
+      [`(if ,g ,e0 ,e1)
+       `(if ,(recur g) ,(recur e0) ,(recur e1))]
+      
+      [`((ref ,ell) ,e0)
+       #:when (eq? ell '|...|)
+       `(,ell ,(recur e0))]
+
+      [`(let (ref ,x) ,rhs ,body)
+       `(let (ref ,x) ,(recur rhs) ,(recur body))]
+
+      [`(|[]| ,es ...)
+       `(|[]| ,@(map recur es))]
+      
+      ;; Inner def
+      [`(def ((ref ,x) ,args ...) ,maybe ... ,body ,more)
+       `(def ((ref ,x) ,@args) ,@maybe ,body ,(recur more))] ; Only repalce outside of inner defs
+
+      ;; Untagged application
+      [`(,es ...)
+       `(,@(map recur es))]
+      
+      [_ ast])) ; Keep everything else the same
+
   ;; `(ref ,Symbol) (ListOf Patterns) DesugaredExpr (or Symbol #f) (ListOf UndesugaredExpr) DesugaredExpr Int -> DesugaredExpr
   ;; x is a ref expr evaluating to the match value (e.g. `(ref ,gx)`) which should be a slice
   ;; body and fail-e must already be desugared
@@ -275,10 +307,7 @@
               fail-e))
 
         (define body+
-          (match body
-            [`(if ,g ,b (fail))
-             `(if ,g ,b ,loop-fail-e)]
-            [_ body]))
+          (replace-fails body loop-fail-e))
 
         (define loop-def
           `(def ((ref ,loop-x) (ref ,loop-fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs)

@@ -7,6 +7,20 @@ def (map f [] ...) []
 def (map f [xs lsts ...] ...)
   [(f xs ...) (map f lsts ...) ...]
 
+def (flatten (? lst is_slice))
+  def (f (? lst is_slice))
+    (foldl (lambda (x acc) (+ acc (f x))) [] lst)
+  def (f x) [x]
+
+  (f lst)
+def (flatten x) x
+
+def (max x) x
+def (max x y)
+  if (> x y) x y
+def (max x y rest ...)
+  (max (max x y) rest ...)
+
 def (add x y)
   x + y
 

@@ -1,20 +1,71 @@
 
-;;def (make_mat `[[,xs ...] ...])
-;;  `[mat ,xs ...]
+def (foldl f acc [] ...) acc
+def (foldl f acc [xs lsts ...] ...)
+  (foldl f (f xs ... acc) lsts ...)
+
+def (map f [] ...) []
+def (map f [xs lsts ...] ...)
+  [(f xs ...) (map f lsts ...) ...]
+
+def (flatten (? lst is_slice))
+  def (f (? lst is_slice))
+    (foldl (lambda (x acc) (+ acc (f x))) [] lst)
+  def (f x) [x]
+
+  (f lst)
+def (flatten x) x
+
+def (max x) x
+def (max x y)
+  if (> x y) x y
+def (max x y rest ...)
+  (max (max x y) rest ...)
+
+def (make_mat [xs ...] ...)
+  `[mat ,xs ...]
 
 def (is_mat `[mat [,(? xs int) ...] ...]) true
 def (is_mat x) false
 
 def (write `[mat [,xs ...] ...])
-  (write xs)
+  let elm_width (max (map (lambda (x) (size (write x))) (flatten xs)) ...)
+
+  def (create_padding 1) " "
+  def (create_padding length)
+    " " + (create_padding (- length 1))
+  
+  def (write_with_pad elm)
+    let elm_str (write elm)
+    let s (size elm_str)
+    let padding_len (- elm_width s)
+
+    if (= padding_len 0) elm_str
+    (create_padding padding_len) + elm_str
+
+  let main_str
+      (foldl (lambda (row acc)
+                let row_str (foldl (lambda (elm acc)
+                                      (+ acc " " (write_with_pad elm)))
+                                  " " row)
+                (+ acc "\n" row_str))
+            " " xs)
+  
+  "`[mat" + main_str + "]"
 
 def (main)
 {
-  let I `[mat ,[1 0]
-              ,[0 1]]
+  let I (make_mat [1 0]
+                  [0 1])
+  let A (make_mat [3 4 5]
+                  [6 4 7])
+  let B (make_mat [31 4 5546]
+                  [6 464587 7]
+                  [6123 4 7])
   {
     (debug_print (write (is_mat [1 2 3])))
     (debug_print (write (is_mat I)))
     (debug_print (write I))
+    (debug_print (write A))
+    (debug_print (write B))
   }
 }

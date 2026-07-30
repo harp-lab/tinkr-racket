@@ -1,10 +1,15 @@
+
+def (foldl f acc [] ...) acc
+def (foldl f acc [xs lsts ...] ...)
+  (foldl f (f xs ... acc) lsts ...)
+
 def `[vec] + (& v `[vec ,a ...]) v
 def (& v `[vec ,a ...]) + `[vec] v
 def `[vec ,(? a int) ...] + `[vec ,(? b int) ...]
   `[vec ,a ... ,b ...]
 
-def (write `[vec ,xs ...]) 
-  "`[vec" + (foldl (lambda (acc x) (+ acc " " (write x))) "" xs) + "]" ;; lambdas don't work yet
+def (write `[vec ,xs ...])
+  "`[vec" + (foldl (lambda (x acc) (+ acc " " (write x))) "" xs) + "]" ;; Empty strings don't work yet
 
 def (to_slice `[vec ,xs ...])
   xs
@@ -13,5 +18,7 @@ def (main)
 {
   (debug_print (write (to_slice `[vec 1 2] + `[vec])))
   (debug_print (write (to_slice `[vec] + `[vec 1 2])))
+  (debug_print (write `[vec]))
+  (debug_print (write `[vec 1 2 3]))
   (debug_print (write `[vec 1 2] + `[vec 3 4 5]))
 }
