@@ -1,6 +1,7 @@
 # Module namespaces and imports
 
-A module imports another module with `include`. The compiler records each
+A module imports another module with `include`. An include is not a runtime
+action and costs nothing when the program runs. The compiler records each
 include as an edge in a graph of modules, and the linker uses that graph to
 decide, for every name a module mentions, which definitions it can dispatch
 to. This file describes what an include provides, how import clauses reshape
