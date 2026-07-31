@@ -1,0 +1,9 @@
+include "lib10.ti" [as m]
+
+def (g x) 42
+
+def (main)
+{
+  (debug_print (write (g 1)))
+  (debug_print (write (m.g 1)))
+}

@@ -1,5 +1,4 @@
 
-;; inner defs do not work
 def (do_some x y)
   def (add z w)
     (+ z w)

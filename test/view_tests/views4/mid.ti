@@ -1,0 +1,3 @@
+include "deep.ti"
+
+def (foo 2) 202

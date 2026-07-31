@@ -120,17 +120,20 @@
     #:exists 'append))
 
 
-(define (compile-all-parallel [separate-logs #f])
-  (define files-root "/tmp/ti/files")
-  (define build-root "/tmp/ti/build")
-  (when (directory-exists? files-root)
-    (define dirlst (directory-list files-root #:build? #f))
-    (define groups ;; Subfolders can be handled in parallel
-      (let ([i 0]) ;; Put into 7 partitions:
-	(group-by (λ (_) (begin0 i (set! i (modulo (add1 i) 7))))
-		  dirlst))) ;; Spin up 7 worker processes:
-    (for/list ([group (in-list groups)])
-	      (spawn-compile-one group separate-logs))))
+;; Compiles only the modules of the given build (its symlinked subdirs) —
+;; NOT everything ever cached under /tmp/ti/files: a stale or broken source
+;; elsewhere in the cache must not affect (or slow down) unrelated builds.
+(define (compile-all-parallel project [separate-logs #f])
+  (define dirlst
+    (for/list ([entry (in-list (directory-list project))]
+               #:when (directory-exists? (build-path project entry)))
+      entry))
+  (define groups ;; Subfolders can be handled in parallel
+    (let ([i 0]) ;; Put into 7 partitions:
+      (group-by (λ (_) (begin0 i (set! i (modulo (add1 i) 7))))
+                dirlst))) ;; Spin up 7 worker processes:
+  (for/list ([group (in-list groups)])
+            (spawn-compile-one group separate-logs)))
 
 
 (define (run-cmd prog . args)

@@ -20,7 +20,20 @@
 
 
 (define-runtime-path this-dir ".")
-(define all-inline-file "/tmp/ti/all.inline")
+
+;; Cache entries are keyed by source AND compiler version: if any rkt/
+;; source changes, every cache dir name changes and old entries are
+;; never consulted again (no rm -rf /tmp/ti needed after compiler edits).
+(define compiler-salt
+  (let ([rkt-files (sort (for/list ([f (in-list (directory-list this-dir #:build? #t))]
+                                    #:when (path-has-extension? f ".rkt"))
+                           (path->string f))
+                         string<?)])
+    (substring (sha1 (open-input-bytes
+                      (apply bytes-append (map file->bytes rkt-files))))
+               0 6)))
+
+(define all-inline-file (format "/tmp/ti/all_~a.inline" compiler-salt))
 
 
 ;; Searches nearby folders for std/base.ti
@@ -47,16 +60,23 @@
         [else (error "Cannot resolve:" inc-str "from" current-path)]))
 
 
-(define (extract-includes path)
-  (define ast (match (parse-file path) [`(module ,_ ,_ ,body) body] [x x]))
+;; Returns a list of include edges for the module at `path`:
+;;   ((<include-string> (clause ...) ...) ...)
+;; in textual order. Only .ti includes are edges.
+(define (extract-include-edges path)
+  (define ast
+    (strip-prov (match (parse-file path) [`(module ,_ ,_ ,body) body] [x x])))
   (let loop ([e ast])
     (match e
-      [`(syn ,_ include (syn ,_ const ,p) ,body)
-       (if (string-suffix? p ".ti") 
-           (cons p (loop body)) 
+      [`(include (const ,p) ,cls ... ,body)
+       (if (and (string? p) (string-suffix? p ".ti"))
+           (cons `(,p ,@cls) (loop body))
            (loop body))]
       [(? list? l) (append-map loop l)]
       [_ '()])))
+
+(define (extract-includes path)
+  (map car (extract-include-edges path)))
 
 
 (define (collect-deps root-path)
@@ -94,14 +114,32 @@
       '()))
 
 
+;; Build-dir stems become C identifier material (mv_<dir>__<name> symbols
+;; embed them), so only [A-Za-z0-9_] may pass through. '.' keeps the
+;; readable '_' convention; anything else (hyphens, spaces, ...) gets the
+;; same hex escape escape-id-for-C uses.
+(define (sanitize-dir-stem name)
+  (apply string-append
+         (for/list ([c (in-string name)])
+           (cond [(or (char-alphabetic? c) (char-numeric? c) (eqv? c #\_))
+                  (string c)]
+                 [(eqv? c #\.) "_"]
+                 [else (string-append "_" (~r (char->integer c) #:base 16
+                                              #:min-width 5 #:pad-string "0"))]))))
+
 (define (install-to-files path)
-  
+
   (define hash (hash-content path))
   (define name (path->string (file-name-from-path path)))
-  (define dir-name (format "~a_~a" (string-replace name "." "_") hash))
+  (define dir-name (format "~a_~a~a" (sanitize-dir-stem name) hash compiler-salt))
   (define files-dir (build-path "/tmp/ti/files" dir-name))
   
   (unless (directory-exists? files-dir)
+    ;; If installation fails partway (e.g. a load error in the module),
+    ;; remove the half-made dir so it cannot poison later builds.
+    (with-handlers ([exn:fail? (lambda (e)
+                                 (delete-directory/files files-dir #:must-exist? #f)
+                                 (raise e))])
     (make-directory* files-dir)
     (copy-file path (build-path files-dir name) #t)
     (match-define `(module ,_ ,bless ,inline
@@ -114,7 +152,7 @@
       #:exists 'replace
       (lambda ()
 	(write (set->list (set-union (list->set old-inline)
-				     (list->set inline)))))))
+				     (list->set inline))))))))
   
   (values dir-name files-dir))
 
@@ -136,10 +174,29 @@
   (display-to-file "" "/tmp/ti/error.log" #:exists 'append)
   
   ;; Symlink all dependencies into the flattened build folder
+  (define dir-names (make-hash)) ;; abs path -> build dir name
   (for ([f (in-list all-files)])
        (define-values (dir-name files-path) (install-to-files f))
+       (hash-set! dir-names f dir-name)
        (make-file-or-directory-link files-path (build-path build-root dir-name)))
-  
+
+  ;; Record the include DAG (with clauses) for the linker:
+  ;;   (prelude <base-dir>)
+  ;;   (root <root-dir>)
+  ;;   (modules (<dir> (<target-dir> (clause ...) ...) ...) ...)
+  (define graph
+    (for/list ([f (in-list all-files)])
+      `(,(hash-ref dir-names f)
+        ,@(for/list ([edge (in-list (extract-include-edges f))])
+            (match-define (cons inc-str cls) edge)
+            `(,(hash-ref dir-names (resolve-include f inc-str)) ,@cls)))))
+  (with-output-to-file (build-path build-root "graph.rktd")
+    #:exists 'replace
+    (lambda ()
+      (write `((prelude ,(hash-ref dir-names base-ti-path))
+               (root ,root-dir-name)
+               (modules ,@graph)))))
+
   (path->string build-root))
 
 
@@ -159,13 +216,9 @@
 
   (set-options! options)
 
-  ;; Cleanup stale parts of the build
-  (run-cmd (find-executable-path "sh") "-c"
-       "rm -f /tmp/ti/build/*/*/*.cpp /tmp/ti/build/*/*/*.h /tmp/ti/build/*/*/*.core /tmp/ti/build/*/*/*.bl /tmp/ti/build/*/*/*.o")  
-
   ;; Launch ~7 independent racket processes
   ;; These tackle the initial per-module compilation
-  (define ti-comp-threads (compile-all-parallel (build-options-separate-logs? options)))
+  (define ti-comp-threads (compile-all-parallel project (build-options-separate-logs? options)))
   (wait-on-all-threads ti-comp-threads)
 
   ;; Compile an init module for globals

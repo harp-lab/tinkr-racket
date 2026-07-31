@@ -1,0 +1,3 @@
+def (sort x) 1
+
+def (fast_sort x) 2

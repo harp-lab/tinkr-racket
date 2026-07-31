@@ -1,0 +1,7 @@
+include "mid.ti" [rename foo bar]
+
+def (main)
+{
+  (debug_print (write (bar 2)))
+  (debug_print (write (bar 3)))
+}

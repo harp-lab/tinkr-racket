@@ -1,0 +1,8 @@
+include "p15.ti" [as M]
+include "q15.ti" [as M]
+
+def (main)
+{
+  (debug_print (write (M.f 1)))
+  (debug_print (write (M.g 2)))
+}

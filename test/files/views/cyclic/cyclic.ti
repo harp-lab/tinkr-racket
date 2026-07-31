@@ -1,0 +1,9 @@
+include "a.ti"
+
+;; Segmentation fault
+
+def (stuff1)
+  "stuff1"
+
+def (main)
+  (debug_print (stuff3))

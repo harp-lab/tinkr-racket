@@ -1,0 +1,10 @@
+include "lib7.ti" [rename f g] [only keep g]
+
+def (drop x) 33
+
+def (main)
+{
+  (debug_print (write (keep 0)))
+  (debug_print (write (g 0)))
+  (debug_print (write (drop 0)))
+}

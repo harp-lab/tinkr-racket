@@ -1,0 +1,6 @@
+
+def (+ lst1 lst2)
+  ;; concat lst1 and lst2
+
+def (* lst num)
+  ;; use +

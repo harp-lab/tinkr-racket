@@ -4,6 +4,38 @@
 
 (provide load-module)
 
+;; --- Qualified references: include "m.ti" [as m] enables m.x ---
+
+;; Folds a left-nested chain of '.' applications of bare refs into one
+;; dotted name string: ((a.b).c) -> "a.b.c". Any other '.' shape is #f.
+(define (dot-chain->name e)
+  (match e
+    [`(ref ,x) (and (symbol? x) (symbol->string x))]
+    [`((ref ,d) ,lhs ,rhs)
+     #:when (eq? d '|.|)
+     (define l (dot-chain->name lhs))
+     (define r (dot-chain->name rhs))
+     (and l r (string-append l "." r))]
+    [_ #f]))
+
+;; Rewrites alias-qualified references m.x (or m.n.x ...) into single free
+;; names |m.x|. These flow through the whole pipeline as ordinary global
+;; refs; since identifiers cannot contain dots, they can never collide with
+;; user names, and escape-id-for-C renders the dot as the unforgeable marker
+;; _0002e that the linker splits back apart. Whether a dotted name resolves
+;; is decided at link time (aliases may arrive through transitive includes).
+(define (rewrite-qualified ast path)
+  (let Q ([e ast])
+    (match e
+      [`((ref ,d) ,lhs ,rhs)
+       #:when (eq? d '|.|)
+       (define name (dot-chain->name e))
+       (unless name
+         (error (format "load error in ~a: a qualified reference must have the form <alias>.<name> (aliases may nest: a.b.x); '.' was applied to ~v and ~v" path lhs rhs)))
+       `(ref ,(string->symbol name))]
+      [(? list? l) (map Q l)]
+      [_ e])))
+
 ;; Returns a module:
 ;;   (module <mod-name> <bless> <inline> <blessed> <lets> <defs>)
 (define (load-module path)
@@ -11,7 +43,7 @@
   (define-values (_3 dir-name _4) (split-path (simplify-path base-dir)))
   (define mod-name (path->string dir-name))
 
-  (define ast (strip-prov (parse-file path)))
+  (define ast (rewrite-qualified (strip-prov (parse-file path)) path))
 
   (let loop ([ast ast]
              [bless-acc '()]
@@ -78,7 +110,8 @@
              (hash-set let-acc name `(let (ref ,name) ,rhs)) 
              def-acc)]
 
-      [`(include ,_ ,rest)
+      ;; Includes may carry clause forms: (include <path> (clause ...) ... <rest>)
+      [`(include ,_ ... ,rest)
        (loop rest bless-acc inline-acc blessed-acc let-acc def-acc)]
      
       [_ (error "Unknown top-level form in module:" ast)])))

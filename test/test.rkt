@@ -12,6 +12,7 @@
   (define no-strict-aliasing (make-parameter #f))
   (define show-flags (make-parameter #f))
   (define print-cmds (make-parameter #f))
+  (define clean-mode (make-parameter #f))
   (define test-file
     (command-line #:program "test.rkt"
                   #:once-each [("-d" "--debug") "Run in debug mode" (debug-mode #t)]
@@ -21,10 +22,11 @@
                   #:once-each [("--no-strict-aliasing") "Pass strict aliasing flag to C++ compiler." (no-strict-aliasing #t)]
                   #:once-each [("--show-flags") "Print flags passed to the C++ compiler." (show-flags #t)]
                   #:once-each [("--print-cmds") "Print the commands that the compiler runs" (print-cmds #t)]
+                  #:once-each [("-c" "--clean") "Wipe the /tmp/ti cache before building" (clean-mode #t)]
                   #:args (filename)
                   filename))
 
-  (void (system "rm -rf /tmp/ti")) ;; optional
+  (when (clean-mode) (void (system "rm -rf /tmp/ti")))
 
   (if test-file
     (build-project test-file (build-options (debug-mode) (separate-logs) (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags) (print-cmds)))
