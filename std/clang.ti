@@ -142,8 +142,10 @@ blessed (alloc_attempt x n)
          (assign alloc_fr (many_t (plus (manys_t alloc_fr) n))))
 
 ;; Slices
+blessed (tag_as_slice s) (u64bit_or 2 s)
+
 blessed (bl_slice_first s) (deref (anys_t (top61 s)))
-blessed (bl_slice_rest s) (plus (anys_t (top61 s)) 1) ;; Note: this removes the slice's tag without retagging
+blessed (bl_slice_rest s) (tag_as_slice (plus (anys_t (top61 s)) 1))
 
 blessed (bl_slice_empty s)
   (u64bit_or (eq s _empty)

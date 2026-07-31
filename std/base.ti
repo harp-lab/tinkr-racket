@@ -93,6 +93,7 @@ blessed (init_obj_from_slice mut_obj curr_i vals)
 }
 
 
+;; (or FunPtr Closure) Slice ->
 ;; Runtime trampoline for dynamically spliced function calls
 def (_apply f args)
   if (= args empty) (f)
@@ -112,11 +113,25 @@ def (_apply f args)
   let r3 = (rest r2)
   if (= r3 empty) (f a0 a1 a2 a3)
   
-  let a4 = (first r3)
-  let r4 = (rest r3)
-  if (= r4 empty) (f a0 a1 a2 a3 a4)
-  
-  (raw_apply f a0 a1 a2 a3 a4 r4)
+  ;; Need to call __apply__ since f could be a closure
+  ;; Stop at 6 args to __apply__ (plus fallback and arg_count to make 8 total)
+  ;; Arg count offest of -1 since __apply__ should only includes f's arguments in it's arg count
+  (raw_apply __apply__ (bless (minus 0 1)) f a0 a1 a2 a3 r3)
+
+;; FunPtr CInt Any Any Any Any Any Slice ->
+;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
+;; This blessed function has a special exception in desugar and limit-def-params which
+;; allows it to take 8 args.
+blessed (_raw__apply f arg_count_offset a0 a1 a2 a3 a4 r4)
+{
+  r4_ptr = (anys_t (top61 r4))
+  r4_length = (_slice_len r4_ptr)
+  arg_count = (plus (plus 5 (u64_t r4_length)) (u64_t arg_count_offset))
+
+  ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)$1, $2, $3, $4, $5, $6, $7)" f arg_count a0 a1 a2 a3 a4 r4)
+  return 0
+}
 
 ;; FunPtr Slice ->
 blessed (_apply_on_slice f arg_count arg0 arg1 arg2 arg3 rest_args)
@@ -142,20 +157,10 @@ blessed (_apply_on_slice f arg_count arg0 arg1 arg2 arg3 rest_args)
   }
 }
 
-;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
-blessed (_raw__apply f a0 a1 a2 a3 a4 r4)
-{
-  r4_ptr = (anys_t (top61 r4))
-  r4_length = (_slice_len r4_ptr)
-
-  ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
-  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)((u64)5 + (u64)$1), $2, $3, $4, $5, $6, $7)" f r4_length a0 a1 a2 a3 a4 r4)
-  return 0
-}
-
+;; FunPtr FunPtr Slice ->
 ;; Similar to _apply except it applies f with a fallback
 def (_apply_with_fallback f fallback args)
-  if (= args empty) (f)
+  if (= args empty) (raw_apply_with_fallback f fallback (bless 0))
   let a0 = (first args)
   let r0 = (rest args)
   if (= r0 empty) (raw_apply_with_fallback f fallback (bless 1) a0)
@@ -256,12 +261,3 @@ blessed (fail_locally fallback a0 a1 a2 a3 a4 a5 a6)
   fb1 = (plus (manys_t fallback) 1)
   return (fun fb1 a0 a1 a2 a3 a4 a5 a6)
 }
-
-
-def (_foldl f acc lst)
-{
-  if (| (is_empty lst) (not acc))
-    acc
-    (_foldl f (f (first lst) acc) (rest lst))
-}
-

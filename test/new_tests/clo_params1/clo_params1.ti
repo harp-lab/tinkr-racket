@@ -1,0 +1,72 @@
+
+def (main)
+  def (write `[set])
+    "set"
+
+
+  def (fun_i a b c ...)
+    c
+
+  def (f5 a b c d e ...)
+    [a b c d e]
+  def (f5 a ...)
+    false
+
+  def (fun_j a (? b int) c ...)
+    c
+  def (fun_j a ...)
+  {
+    (debug_print "fun_j failed")
+    a
+  }
+
+
+  def (fun_k (& xs `[set]) ...)
+    xs
+  def (fun_k xs ...)
+  {
+    (debug_print "fun_k failed")
+    xs
+  }
+
+  def (fun_add x y)
+    (+ x y)
+  def (fun_add x y rest ...)
+    (fun_add (+ x y) rest ...)
+
+  {
+    (debug_print "fun_i")
+    (debug_print (write (fun_i 5 6)))
+    (debug_print (write (fun_i 5 6 7)))
+    (debug_print (write (fun_i 5 6 7 8 9 10 11 12)))
+
+    (debug_print "fun_j")
+    (debug_print (write (fun_j 5 6)))
+    (debug_print (write (fun_j 5 6 7)))
+    (debug_print (write (fun_j 5 6 7 8 9 10 11 12)))
+
+    ;; The rest of these should all fail:
+    (debug_print (write (fun_j 5 "string")))
+    (debug_print (write (fun_j 5 "string" 7)))
+    (debug_print (write (fun_j 5 "string" 7 8)))
+    (debug_print (write (fun_j 5 "string" 7 8 9)))
+    (debug_print (write (fun_j 5 "string" 7 8 9 10)))
+    (debug_print (write (fun_j 5 "string" 7 8 9 10 11)))
+    (debug_print (write (fun_j 5 "string" 7 8 9 10 11 12)))
+
+    (debug_print "fun_k")
+    (debug_print (write (fun_k [])))
+    (debug_print (write (fun_k `[set])))
+    (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set])))
+    (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set])))
+
+    (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] 2)))
+    (debug_print (write (fun_k `[set] `[set] `[set] `[set] `[set] `[set] `[set] `[set] 2)))
+
+    ;; Tests that all (even unused) args are passed along to failx
+    (debug_print "fun_add")
+    (debug_print (write (fun_add 1 2)))
+    (debug_print (write (fun_add 1 2 3)))
+    (debug_print (write (fun_add 1 2 3 4)))
+    (debug_print (write (fun_add 1 2 3 4 5)))
+  }
