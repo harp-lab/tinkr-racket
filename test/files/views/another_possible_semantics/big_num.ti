@@ -1,0 +1,10 @@
+include "math.ti"
+
+def (make_big n)
+  `[big n]
+
+extend (+ `[big x] y)
+  ;; ...
+extend (+ x `[big y])
+  ;; ...
+

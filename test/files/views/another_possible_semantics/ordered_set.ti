@@ -1,0 +1,11 @@
+include "collections.ti"
+
+def (make_ord_set xs ...)
+  ;; Deduplicate xs
+  `[ord_set xs ...]
+
+extend (+ `[ord_set xs ...] x)
+  ;; ...
+extend (+ x `[ord_set xs ...])
+  ;; ...
+

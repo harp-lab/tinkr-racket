@@ -1,0 +1,4 @@
+include "b.ti"
+
+def (stuff2)
+  "stuff2"

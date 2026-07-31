@@ -1,0 +1,25 @@
+include "lib2.ti"
+include "lib1.ti"
+
+def (div x y)
+  "curr: div " + (write x) + " and " + (write y)
+
+def (run_tests_2_then_1)
+{
+  (debug_print (write (add 1 2)))
+  (debug_print (write (add true false)))
+
+  (debug_print (write (sub 1 2)))
+  (debug_print (write (sub true false)))
+
+  (debug_print (write (mul 1 2)))
+  (debug_print (write (mul true false)))
+
+  (debug_print (write (div 1 2)))
+  (debug_print (write (div true false)))
+
+  (debug_print (write (mod 1 2)))
+  (debug_print (write (mod 3 4)))
+  (debug_print (write (mod 1 2 3)))
+  (debug_print (write (mod true false)))
+}

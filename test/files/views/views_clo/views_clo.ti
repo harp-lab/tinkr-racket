@@ -1,0 +1,30 @@
+include "mod2.ti"
+
+def (f x y)
+	y
+
+def (foo)
+	def (f x)
+		x
+	def (g x)
+		x
+	def (h x)
+		x
+	
+  {
+    (debug_print (write (f 0)))       ;; 0
+    (debug_print (write (f 0 1)))     ;; 1
+    (debug_print (write (f 0 1 2)))   ;; 2
+    ;;(debug_print (write (f 0 1 2 3))) ;; A dynamic failed to dispatch error
+    (debug_print (write (g 0)))       ;; 0
+    (debug_print (write (g 0 1)))     ;; 1
+    (debug_print (write (h 0)))       ;; 0
+    ;;(debug_print (write (h 0 1)))     ;; A dynamic failed to dispatch error
+  }
+
+def (main)
+{
+	(foo)
+	;;(debug_print (write (g 0)))      ;; A dynamic failed to dispatch error
+	;;(debug_print (write (h 0)))     ;; This should produce a static undeclared identifier error, but instead it produces a dynamic dispatch error
+}
