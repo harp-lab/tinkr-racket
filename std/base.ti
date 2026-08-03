@@ -24,6 +24,9 @@ include "main.ti"
 let none = `[none]
 let _noarg = `[_noarg]
 
+;; A compiler internal value that indicates when a pattern match has failed (returned from an inner loop).
+let _fail = `[_fail]
+
 def x = y false
 
 

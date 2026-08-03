@@ -24,9 +24,12 @@ fun_k
 fun_k failed
 [[]]
 [set]
+[set set set set set set set set]
 [set set set set set set set set set]
 fun_k failed
 [set set set set set set set set set 2]
+fun_k failed
+[set set set set set set set set 2]
 fun_add
 3
 6

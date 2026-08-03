@@ -1,9 +1,8 @@
 
+def (write `[set])
+  "set"
+
 def (main)
-  def (write `[set])
-    "set"
-
-
   def (fun_i a b c ...)
     c
 

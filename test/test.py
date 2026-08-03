@@ -36,7 +36,7 @@ TEST_DIRS = [TEST_DIR_TESTS, TEST_DIR_NEW_TESTS, TEST_DIR_VIEW_TESTS]
 
 def _test_compiler(file, tests, racket_path):
     b_stdout, _, _ = runcmdsafe(
-        f'"{racket_path}" "{PATH_TO_TESTER_FILE}" "{file}"'
+        f'"{racket_path}" "{PATH_TO_TESTER_FILE}" "-c" "{file}"'
     )
 
     # Invoke X86 output binary.

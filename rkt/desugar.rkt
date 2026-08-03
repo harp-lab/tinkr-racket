@@ -301,10 +301,7 @@
         (define recur-loop-e
           (construct-application-with-fallback loop-x loop-fallback-x (append (list `((ref rest) (ref ,x-slice))) update-accs)))
 
-        (define loop-fail-e
-          (if fail-x
-              (construct-application-with-fallback fail-x fallback-x sig-params)
-              fail-e))
+        (define loop-fail-e `(ref _fail)) ;; _fail is a special value to be returned on fail
 
         (define body+
           (replace-fails body loop-fail-e))
@@ -320,8 +317,13 @@
                     qd)))
             ,enter-loop-e))
 
+        (define result-x (gensymb 'loop_result))
+
         `(if ((ref is_slice) (ref none) (bless (const 1)) ,x)
-          ,loop-def
+          (let (ref ,result-x) ,loop-def
+            (if (bless ((ref equal) (ref _fail) (ref ,result-x))) ;; Check if the loop returned _fail and fail accordingly
+                ,fail-e
+                (ref ,result-x)))
           ,fail-e)]
       
       [(cons e0 es)
