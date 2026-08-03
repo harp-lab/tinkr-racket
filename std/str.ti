@@ -93,9 +93,15 @@ blessed (str_step_one s)
   return 0
 }
 
+;; CStr u64 u64 -> u64
+;; Returns the length of s (most significant 32 bits) and a hash
+;; of s (least significant 32 bits). len and h should be initalized
+;; to zero on first call.
 blessed (str_len_hash s len h)
 {
-  if (eq (deref (cstr_t s)) 0) return 0 { }
+  ;; If it is any empty string then just return len_hash=1 (so the len=0 and hash=1)
+  ;; We can't just use C's 0 since otherwise it will cause problems elsewhere since C's 0 is treated specially).
+  if (eq (deref (cstr_t s)) 0) return 1 { }
   
   p0 = (str_step_one s)
   s0 = (u64plus (cdr_u32 p0) s)

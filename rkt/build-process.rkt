@@ -26,7 +26,9 @@
    opt?
    no-strict-aliasing?
    show-flags?
-   print-cmds?]
+   print-cmds?
+   c-compiler-flags
+   c-linker-flags]
   #:transparent)
 
 ;; A helper human-readable tag for the error file produced
@@ -176,7 +178,8 @@
          (if (and (build-options-lto? options) clang?) (list "-flto=thin") '())
          (if (build-options-opt? options) (list "-O2") '())
          (if (build-options-no-strict-aliasing? options) (list "-fno-strict-aliasing") '())
-         (if (build-options-debug? options) (list "-DDEBUG") '())))
+         (if (build-options-debug? options) (list "-DDEBUG") '())
+         (build-options-c-compiler-flags options)))
      
      (when (build-options-show-flags? options)
        (displayln (format "CXX compile flags: ~a" compile-flags)))
@@ -218,6 +221,7 @@
             (list "-lgc" "-lgmp"))
         (if (build-options-opt? options) (list "-O2") '())
         (if (build-options-no-strict-aliasing? options) (list "-fno-strict-aliasing") '())
+        (build-options-c-linker-flags options)
         (list "-o" out-path)))
   
   (when (build-options-show-flags? options)

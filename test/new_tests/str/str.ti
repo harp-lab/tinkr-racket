@@ -1,6 +1,5 @@
 
 ;; Failing:
-;;  (dispatch on) empty strings
 ;;  equality
 
 def (main)

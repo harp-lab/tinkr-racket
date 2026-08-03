@@ -29,5 +29,5 @@
   (when (clean-mode) (void (system "rm -rf /tmp/ti")))
 
   (if test-file
-    (build-project test-file (build-options (debug-mode) (separate-logs) (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags) (print-cmds)))
+    (build-project test-file (build-options (debug-mode) (separate-logs) (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags) (print-cmds) '() '()))
     (error "No test file specified.")))
