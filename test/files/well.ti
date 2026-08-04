@@ -1,0 +1,14 @@
+
+def (f x)
+	def (loop i)
+  {
+		(debug_print "i=" + (write i) + " with x=" + (write x))
+    if i <= 0
+       0
+       (loop (- i 1))
+  }
+
+	(loop 5)
+
+def (main)
+  (f 5)

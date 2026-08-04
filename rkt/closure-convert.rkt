@@ -377,25 +377,6 @@
     (set-subtract (set-union free-vars rest-free) def-names)))
 
 
-;; (ListOf Expr) -> (SetOf Symbol)
-(define (get-def-names defs)
-  (for/set ([def defs])
-      (get-def-name def)))
-
-;; (ListOf Expr) Symbol -> Expr
-(define (get-def-with-name defs fx)
-    (define (def-name-maches? def) (equal? fx (get-def-name def)))
-
-    (for/first ([def defs]
-                #:when (def-name-maches? def))
-      def))
-
-;; Expr -> Symbol
-(define (get-def-name def)
-  (match def
-    [`(def ((ref ,fx) ,params ...) ,body ...)
-      fx]))
-
 ;; Symbol (ListOf Symbol) Expr -> Expr
 (define (unpack-clo clo-slice-x xs body)
   (match xs
