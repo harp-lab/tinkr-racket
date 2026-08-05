@@ -7,10 +7,11 @@
 (provide lift-well-known-defs)
 
 
-;; AlphatizedModule -> WellKnownModule
+;; AnnotatedWellKnownMod -> WellKnownModule
 (define (lift-well-known-defs mod)
   (match mod
     [`(module ,name ,mtag ,bless ,inline ,blessed ,lets ,defs ,methods ,types)
+
      (define defs+
        (foldr append '() ;; flatten one level
         (for/list ([ast defs]) 
@@ -22,9 +23,9 @@
 ;; Expr -> (SetOf Expr)
 (define (lift-well-known/def def-ast)
   (match def-ast
-    [`(def (,xs ...) ,maybe-fail-to ... ,body)
+    [`(def (,xs ...) ,annotations ,body)
       (define-values (new-body new-defs) (lift-well-known/ast body))
-      (set-add new-defs `(def (,@xs) ,@maybe-fail-to ,new-body))]
+      (set-add new-defs `(def (,@xs) ,annotations ,new-body))]
     [_ (error 'lift-well-known-defs)]))
 
 ;; Expr -> (ValuesOf Expr (SetOf Expr))
@@ -106,7 +107,7 @@
                    (lambda (es) `(|[]| ,@es)))]
 
     ;; Inner def
-    [`(def ((ref ,fx) ,xs ...) ,maybe-fail-to ... ,body ,more)
+    [`(def ((ref ,fx) ,xs ...) ,annotations ,body ,more)
       (lift-well-known/inner-def ast)]
 
     ;; Untagged application

@@ -5,8 +5,18 @@
          get-def-name
          get-def-names
          get-def-with-name
-         get-fail-chains)
+         get-fail-chains
+         add-ref
+         remove-ref)
 
+
+;; Symbol -> Ref
+(define (add-ref x) `(ref ,x))
+
+;; Ref -> Symbol
+(define (remove-ref ref)
+  (match ref
+    [`(ref ,x) x]))
 
 ;; Expr -> (ValuesOf (ListOf Expr) Expr)
 ;; Split the nested sibling defs into a list of seperate defs (and a final rest-ast).
@@ -57,22 +67,23 @@
 
 
 ;; (ListOf Expr) -> (SetOf (ListOf Symbol))
+;; Can be used after free vars pass.
 ;; A set of lists of def names which are linked together in a fail chain by fail_to.
 ;; The first def in a chain is the entry point.
 (define (get-fail-chains defs)
   (for/fold ([chains (set)])
             ([def defs])
     (match def
-      [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+      [`(def ((ref ,fx) ,params ...) ,annotations ,body)
 
         ;; (or Symbol #f)
         (define maybe-fail-x
-          (if (null? maybe-fail-to)
-            #f
-            (match maybe-fail-to
-              [`((fail_to (ref ,fail-x)))
-                fail-x])))
-        
+          (for/fold ([maybe-fail-x #f])
+                    ([annotation annotations])
+            (match annotation
+              [`(fail_to (ref ,fail-x)) fail-x]
+              [_ maybe-fail-x])))
+
         (cond
           ;; Add the fail-x to an existing or new chain
           [maybe-fail-x

@@ -18,7 +18,7 @@
 (define apply-x '__apply__)
 (define escaped-apply-x (escape-id-for-C apply-x))
 
-;; AlphatizedModule -> CloModule
+;; AnnotatedFreeVarsMod -> CloModule
 (define (clo-convert-mod mod)
   (set! method-map (hash))
   (set! types-st (set))
