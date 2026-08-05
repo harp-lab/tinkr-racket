@@ -24,25 +24,22 @@
 (define (lift-well-known/def def-ast)
   (match def-ast
     [`(def (,xs ...) ,annotations ,body)
-      (define-values (new-body new-defs) (lift-well-known/ast body))
+      (define-values (new-body new-defs) (lift-well-known/ast body (hash)))
       (set-add new-defs `(def (,@xs) ,annotations ,new-body))]
     [_ (error 'lift-well-known-defs)]))
 
-;; Expr -> (ValuesOf Expr (SetOf Expr))
+;; Expr (HashOf Symbol (ListOf Symbol)) -> (ValuesOf Expr (SetOf Expr))
+;; Lifts well-known defs from the expression to the top level while using an
+;; environment mapping well-known def names to the free variables it needs
+;; (in order to transform later call-sites).
 ;; Returns the modified expression and a list of top-level defs which are being lifted out.
-(define (lift-well-known/ast ast)
-  (define (recur ast outer-expr)
-    (define-values (expr defs) (lift-well-known/ast ast))
-    (values
-      (outer-expr expr)
-      defs))
-
+(define (lift-well-known/ast ast env)
   (define (recur-exprs asts outer-expr)
     (define-values (exprs defs)
       (for/foldr ([exprs (list)]
                   [defs (set)])
-                ([ast asts])
-        (define-values (expr new-defs) (lift-well-known/ast ast))
+                 ([ast asts])
+        (define-values (expr new-defs) (lift-well-known/ast ast env))
         
         (values
           (cons expr exprs)
@@ -65,9 +62,9 @@
 
     ;; Simple recursion
     [`(if ,g ,t ,e)
-      (define-values (g-expr g-defs) (lift-well-known/ast g))
-      (define-values (e-expr e-defs) (lift-well-known/ast t))
-      (define-values (t-expr t-defs) (lift-well-known/ast e))
+      (define-values (g-expr g-defs) (lift-well-known/ast g env))
+      (define-values (e-expr e-defs) (lift-well-known/ast t env))
+      (define-values (t-expr t-defs) (lift-well-known/ast e env))
 
       (values
         `(if ,g-expr ,e-expr ,t-expr)
@@ -81,7 +78,7 @@
      (values `(fail) (set))]
 
     [`(,ell ,e0) #:when (eq? ell '|...|)
-      (define-values (expr defs) (lift-well-known/ast e0))
+      (define-values (expr defs) (lift-well-known/ast e0 env))
 
       (values
         `(,ell ,expr)
@@ -93,8 +90,8 @@
 
     ;; Let
     [`(let (ref ,x) ,rhs ,body)
-      (define-values (rhs-expr rhs-defs) (lift-well-known/ast rhs))
-      (define-values (body-expr body-defs) (lift-well-known/ast body))
+      (define-values (rhs-expr rhs-defs) (lift-well-known/ast rhs env))
+      (define-values (body-expr body-defs) (lift-well-known/ast body env))
 
       (values
         `(let (ref ,x) ,rhs-expr
@@ -108,29 +105,31 @@
 
     ;; Inner def
     [`(def ((ref ,fx) ,xs ...) ,annotations ,body ,more)
-      (lift-well-known/inner-def ast)]
+      (lift-well-known/inner-def ast env)]
 
-    ;; Untagged application
+    ;; Well-known call sites
     [`((ref ,fx) ,fallback ,arg-count ,es ...)
-      (define-values (fx-expr fx-defs) (lift-well-known/ast `(ref ,fx)))
-      (define-values (_f-expr _f-defs) (lift-well-known/ast fallback))
-      (define-values (new-es es-defs)
-        (for/foldr ([new-es (list)]
-                    [defs (set)])
-                   ([e es])
-          (define-values (new-e e-defs) (lift-well-known/ast e))
+      (define-values (new-es es-defs) (recur-exprs es (lambda (es) es)))
 
-          (values
-            (cons new-e new-es)
-            (set-union defs e-defs))))
+      (define free-vars (hash-ref env fx (list)))
+      (define free-refs (map add-ref free-vars))
 
       (values
-        `(,fx-expr ,fallback ,arg-count ,@new-es)
-        (set-union fx-defs es-defs))]))
+        `((ref ,fx) ,fallback ,arg-count ,@free-refs ,@new-es)
+        es-defs)]
+
+    ;; Untagged application
+    [`(,fe ,fallback ,arg-count ,es ...)
+      (define-values (fe-expr fe-defs) (lift-well-known/ast fe env))
+      (define-values (new-es es-defs) (recur-exprs es (lambda (es) es)))
+
+      (values
+        `(,fe-expr ,fallback ,arg-count ,@new-es)
+        (set-union fe-defs es-defs))]))
 
 
-;; Expr -> (ValuesOf Expr (SetOf Expr))
-(define (lift-well-known/inner-def def-ast)
+;; Expr (HashOf Symbol (ListOf Symbol)) -> (ValuesOf Expr (SetOf Expr))
+(define (lift-well-known/inner-def def-ast env)
 
   (struct def-group
     [defs        ;; (ListOf Expr)
@@ -144,8 +143,6 @@
 
   ;; Unnest the nested sibling defs
   (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
-
-  (define-values (rest-expr rest-new-defs) (lift-well-known/ast rest-ast))
 
   ;; Extract fail chains in order to know what is the first def in the chain to test if it
   ;; is well-known and, if it is well-known, pass along all free variables for the entire chain.
@@ -164,14 +161,31 @@
           (match def
             [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,(and params (or `(ref ,xs)
                                                                                     `(|...| (ref ,xs)))) ...)
-                ,(and annotations (list-no-order `(free_vars (ref ,free-vars) ...) other ...))
+                ,(and annotations (list-no-order `(free_vars (ref ,free-vars) ...) `(well_known (ref ,well-known-def-calls) ...) other ...))
                 ,body)
+
+              ;; Extra free vars that are being added in this pass which need to be passed to
+              ;; well known call sites (and thus need to be threaded through this def).
+              (define free-vars-from-calls
+                (for/fold ([free-vars-from-calls (set)])
+                          ([name well-known-def-calls])
+                  (define free-vars-for-call (hash-ref env name (list)))
+                  (set-union free-vars-from-calls (list->set free-vars-for-call))))
+
+              ;; These def names are being moved to the top level, so they can
+              ;; be safely removed from the free vars
+              (define lifted-defs-to-remove (list->set (hash-keys env)))
+
+              (define total-free-vars
+                (set-subtract
+                  (set-union (list->set free-vars) (def-group-free-vars curr-def-group) free-vars-from-calls)
+                  lifted-defs-to-remove))
 
               (define def+
                 `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,body))
 
               (def-group (append (def-group-defs curr-def-group) (list def+))
-                         (set-union (list->set free-vars) (def-group-free-vars curr-def-group)))])))
+                         total-free-vars)])))
       
       (set-add def-groups def-g)))
 
@@ -205,39 +219,26 @@
       (define group-free-var-refs (map (lambda (x) `(ref ,x)) group-free-vars))
 
       (define new-lifted-defs
-        (for/set ([def (def-group-defs curr-def-group)])
+        (for/list ([def (def-group-defs curr-def-group)])
           (match def
             [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
 
               (define new-lifted-def
                 `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@group-free-var-refs ,@params) ,annotations ,body))
 
-              ;; Use unescaped names when registering (they are escaped later on)
-              ;; TODO: When first def: register
-              ;;(register-method! fx #f new-apply-x)
-
               new-lifted-def])))
 
-      (def-group (set->list new-lifted-defs) group-free-vars)))
+      (def-group new-lifted-defs group-free-vars)))
 
+  (define lifted-defs (flatten-def-groups (set->list lifted-def-groups)))
 
-  ;; Pass free variables to well known call sites
-  (define-values (lifted-defs non-well-known-defs+ rest-expr+)
-    (for*/fold ([defs+ (flatten-def-groups (set->list lifted-def-groups))]
-                [non-well-known-defs+ non-well-known-defs]
-                [rest-expr+ rest-expr])
-               ([lifted-group lifted-def-groups]
-                [def (def-group-defs lifted-group)])
-      
-      (define free-var-refs (map (lambda (x) `(ref ,x)) (def-group-free-vars lifted-group)))
-      
-      (define (lift-calls e)
-        (lift-well-known-call-sites e (get-def-name def) free-var-refs))
+  ;; Modify the environment to include the new well-known defs' free vars
+  (define env+
+    (for/fold ([env+ env])
+              ([group lifted-def-groups])
+      (define first-def-name (get-def-name (car (def-group-defs group))))
 
-      (values
-        (map lift-calls defs+)
-        (map lift-calls non-well-known-defs+)
-        (lift-calls rest-expr+))))
+      (hash-set env+ first-def-name (def-group-free-vars group))))
 
   ;; Lift well-known defs from newly lifted defs bodies
   (define lifted-defs+
@@ -245,83 +246,32 @@
       (for/list ([def lifted-defs])
         (match def
           [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
-            (define-values (new-body new-defs) (lift-well-known/ast body))
+            (define-values (new-body new-defs) (lift-well-known/ast body env+))
             
             (set-add
               new-defs
               `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,new-body))]))))
 
   ;; Lift well-known defs from bodies of non-well-known-defs
-  (define-values (lifted-defs++ non-well-known-defs++)
+  (define-values (lifted-defs++ non-well-known-defs+)
     (for/fold ([lifted-defs++ lifted-defs+]
-               [non-well-known-defs++ (list)])
-              ([def non-well-known-defs+])
+               [non-well-known-defs+ (list)])
+              ([def non-well-known-defs])
       (match def
         [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
-          (define-values (new-body new-defs) (lift-well-known/ast body))
+          (define-values (new-body new-defs) (lift-well-known/ast body env+))
 
           (values
             (set-union new-defs lifted-defs++)
             (append
-              non-well-known-defs++
+              non-well-known-defs+
               (list `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,new-body))))])))
 
-  ;; Lift well-known defs from rest-expr
-  (define-values (rest-expr++ new-defs-from-rest) (lift-well-known/ast rest-expr+))
+  ;; Lift well-known defs from rest-ast
+  (define-values (rest-expr+ new-defs-from-rest) (lift-well-known/ast rest-ast env+))
 
   (add-to-global-names! well-known-def-names)
 
   (values
-    (nest-sibling-defs non-well-known-defs++ rest-expr++)
+    (nest-sibling-defs non-well-known-defs+ rest-expr+)
     (set-union lifted-defs++ new-defs-from-rest)))
-
-
-;; Expr Symbol (ListOf Ref) -> Expr
-;; TODO: refactor
-(define (lift-well-known-call-sites ast def-name free-var-refs)
-  (define (recur ast)
-    (lift-well-known-call-sites ast def-name free-var-refs))
-
-  (match ast
-    [`(ref ,x) ast]
-    [`(const ,_) ast]
-    [`(bless ,e0) ast] ;; TODO: Are call sites allowed inside bless?
-
-    [`(if ,g ,t ,e)
-     `(if ,(recur g) ,(recur t) ,(recur e))]
-
-    [`(continue-dispatch ,es ...)
-     `(continue-dispatch ,@(map recur es))]
-    
-    [`(fail) ast]
-    [`(fail_to ,_) ast]
-    [`(well_known ,_ ...) ast]
-    [`(free_vars ,_ ...) ast]
-    [`(is_well_known ,_ ...) ast]
-
-    [`(,ell ,e0) #:when (eq? ell '|...|)
-     `(,ell ,(recur e0))]
-    
-    [`(,(and ctor (or 'object 'subword)) ,es ...)
-     `(,ctor ,@(map recur es))]
-
-    ;; Let
-    [`(let (ref ,x) ,rhs ,body)
-     `(let (ref ,x) ,(recur rhs) ,(recur body))]
-
-    ;; Slices
-    [`(|[]| ,es ...)
-     `(|[]| ,@(map recur es))]
-
-    ;; Inner/outer defs
-    [`(def (,xs ...) ,body ...)
-     `(def (,@xs) ,@(map recur body))]
-
-    ;; Well-known call site
-    [`((ref ,fx) ,fallback ,arg-count ,es ...)
-     #:when (equal? fx def-name)
-     `((ref ,fx) ,fallback ,arg-count ,@free-var-refs ,@(map recur es))]
-    
-    ;; Remaining untagged applications
-    [`(,es ...)
-     `(,@(map recur es))]))

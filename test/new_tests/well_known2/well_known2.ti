@@ -1,0 +1,19 @@
+
+def (f x)
+	def (loop i)
+    def (helper)
+      (loop (- i 1))
+
+    {
+      (debug_print "i=" + (write i) + " with x=" + (write x))
+      if i <= 0
+        0
+        (helper) ;; `x` needs to be treaded through `helper` when this is lifted
+    }
+
+  {
+    (loop 5)
+  }
+
+def (main)
+  (f 5)
