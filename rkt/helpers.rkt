@@ -7,7 +7,10 @@
          get-def-with-name
          get-fail-chains
          add-ref
-         remove-ref)
+         remove-ref
+         get-annotation
+         annotation-exists-on-def?
+         annotation-exists?)
 
 
 ;; Symbol -> Ref
@@ -76,13 +79,13 @@
     (match def
       [`(def ((ref ,fx) ,params ...) ,annotations ,body)
 
+        (define ann-val (get-annotation annotations 'fail_to))
+
         ;; (or Symbol #f)
         (define maybe-fail-x
-          (for/fold ([maybe-fail-x #f])
-                    ([annotation annotations])
-            (match annotation
-              [`(fail_to (ref ,fail-x)) fail-x]
-              [_ maybe-fail-x])))
+          (match ann-val
+            [#f #f]
+            [`((ref ,fail-x)) fail-x]))
 
         (cond
           ;; Add the fail-x to an existing or new chain
@@ -121,3 +124,40 @@
             (if found-in-chain
                 chains
                 (set-add chains (list fx)))])])))
+
+
+;; (ListOf Expr) Symbol -> (or (ListOf Any) #f)
+(define (get-annotation annotations annotation-name)
+  (for/fold ([maybe #f])
+            ([annotation annotations])
+    (match annotation
+      [`(,(== annotation-name) ,vals ...) vals]
+      [_ maybe])))
+
+;; Expr Symbol -> Bool
+(define (annotation-exists-on-def? def-ast annotation-name)
+  (match def-ast
+    [`(def (,xs ...) ,annotations ,body)
+      (annotation-exists? annotations annotation-name)]))
+
+;; (ListOf Expr) Symbol -> Bool
+(define (annotation-exists? annotations annotation-name)
+  (for/first ([annotation annotations]
+              #:when (match annotation
+                        [`(,(== annotation-name) _ ...) #t]
+                        [_ #f]))
+    #t))
+
+
+(module+ test
+  (require rackunit)
+  
+  (define ann1
+    '((is_well_known)
+      (well_known (ref loop))
+      (free_vars (ref loop) (ref x))
+      (fail_to (ref loop2))))
+
+  (check-equal? (get-annotation ann1 'is_well_known) '())
+  (check-equal? (get-annotation ann1 'free_vars) '((ref loop) (ref x)))
+  (check-equal? (get-annotation ann1 'abc) #f))

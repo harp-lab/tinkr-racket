@@ -40,7 +40,7 @@
      (define arg-xs (pad-params 4))
 
      (define apply-fun-ptr-def
-      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,arg-count-x) (ref ,fun-ptr-x) ,@arg-xs (... (ref ,rest-args-x)))
+      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,arg-count-x) (ref ,fun-ptr-x) ,@arg-xs (... (ref ,rest-args-x))) ()
         ((ref _apply_on_slice) (ref ,fun-ptr-x) (ref ,arg-count-x) ,@arg-xs (ref ,rest-args-x))))
     
      (register-method! apply-x #f apply-fun-ptr-x)
@@ -224,15 +224,15 @@
     (for/fold ([chains (set)]) ;; (SetOf (ListOf Symbol))
               ([def defs])
       (match def
-        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+        [`(def ((ref ,fx) ,params ...) ,annotations ,body)
+
+          (define ann-val (get-annotation annotations 'fail_to))
 
           ;; (or Symbol #f)
           (define maybe-fail-x
-            (if (null? maybe-fail-to)
-              #f
-              (match maybe-fail-to
-                [`((fail_to (ref ,fail-x)))
-                  fail-x])))
+            (match ann-val
+              [#f #f]
+              [`((ref ,fail-x)) fail-x]))
           
           (cond
             ;; Add the fail-x to an existing or new chain
