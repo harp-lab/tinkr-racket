@@ -12,6 +12,7 @@
 
          ;; TODO: we probably shouldn't export these
          global-names
+         add-to-global-names!
          soft-globals
          reserved-bl-x
 
@@ -21,6 +22,11 @@
 
 
 (define global-names 0) ;; (set)
+
+;; (SetOf Symbol) -> Void
+(define (add-to-global-names! new-names)
+  (set! global-names (set-union global-names new-names)))
+
 ;; Free names that came from closure-chain fallbacks: if such a name
 ;; resolves to nothing at link time, the module demands a runtime dispatch
 ;; error at that point (never a shim to an assumed C function).

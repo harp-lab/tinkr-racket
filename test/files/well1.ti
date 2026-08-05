@@ -1,0 +1,29 @@
+
+def (indirect_call f arg)
+  (f arg)
+
+def (f x)
+	def (loop i)
+  {
+		(debug_print "i=" + (write i) + " with x=" + (write x))
+    if i <= 0
+       0
+       (loop (- i 1))
+  }
+
+  def (non_well_known_loop i)
+  {
+		(debug_print "i=" + (write i) + " with x=" + (write x))
+    if i <= 0
+       0
+       (non_well_known_loop (- i 1))
+  }
+
+  {
+    (loop 5)
+    (non_well_known_loop 5)
+    (indirect_call non_well_known_loop 5)
+  }
+
+def (main)
+  (f 5)

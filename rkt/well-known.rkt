@@ -185,8 +185,9 @@
   (define well-known-def-groups
     (for/fold ([well-known-def-groups (set)])
               ([curr-def-group def-groups])
-      (define first-def (car (def-group-defs curr-def-group)))
-      (if (is-well-known-in? first-def def-ast)
+      (define first-def-name (get-def-name (car (def-group-defs curr-def-group))))
+
+      (if (is-well-known-in? first-def-name def-ast)
           (set-add well-known-def-groups curr-def-group)
           well-known-def-groups)))
 
@@ -233,8 +234,10 @@
                ([lifted-group lifted-def-groups]
                 [def (def-group-defs lifted-group)])
       
+      (define free-var-refs (map (lambda (x) `(ref ,x)) (def-group-free-vars lifted-group)))
+      
       (define (lift-calls e)
-        (lift-well-known-call-sites e (get-def-name def) (def-group-free-vars lifted-group)))
+        (lift-well-known-call-sites e (get-def-name def) free-var-refs))
 
       (values
         (map lift-calls defs+)
@@ -271,9 +274,7 @@
   ;; Lift well-known defs from rest-expr
   (define-values (rest-expr++ new-defs-from-rest) (lift-well-known/ast rest-expr+))
 
-  ;; TODO: add well-known names to global-x
-
-  (define def-names (get-def-names defs))
+  (add-to-global-names! well-known-def-names)
 
   (values
     (nest-sibling-defs non-well-known-defs++ rest-expr++)
@@ -330,9 +331,126 @@
     [`(,es ...)
       (foldl set-union (set) (map free-vars es))]))
 
-(define (lift-well-known-call-sites ast def-name free-vars)
-  ast) ;; TODO
+;; Expr Symbol (ListOf Ref) -> Expr
+(define (lift-well-known-call-sites ast def-name free-var-refs)
+  (define (recur ast)
+    (lift-well-known-call-sites ast def-name free-var-refs))
+
+  (match ast
+    [`(ref ,x) ast]
+    [`(const ,_) ast]
+    [`(bless ,e0) ast] ;; TODO: Are call sites allowed inside bless?
+
+    [`(if ,g ,t ,e)
+     `(if ,(recur g) ,(recur t) ,(recur e))]
+
+    [`(continue-dispatch ,es ...)
+     `(continue-dispatch ,@(map recur es))]
+    
+    [`(fail) ast]
+    [`(fail_to ,_) ast]
+
+    [`(,ell ,e0) #:when (eq? ell '|...|)
+     `(,ell ,(recur e0))]
+    
+    [`(,(and ctor (or 'object 'subword)) ,es ...)
+     `(,ctor ,@(map recur es))]
+
+    ;; Let
+    [`(let (ref ,x) ,rhs ,body)
+     `(let (ref ,x) ,(recur rhs) ,(recur body))]
+
+    ;; Slices
+    [`(|[]| ,es ...)
+     `(|[]| ,@(map recur es))]
+
+    ;; Inner/outer defs
+    [`(def (,xs ...) ,body ...)
+     `(def (,@xs) ,@(map recur body))]
+
+    ;; Well-known call site
+    [`((ref ,fx) ,fallback ,arg-count ,es ...)
+     #:when (equal? fx def-name)
+     `((ref ,fx) ,fallback ,arg-count ,@free-var-refs ,@(map recur es))]
+    
+    ;; Remaining untagged applications
+    [`(,es ...)
+     `(,@(map recur es))]))
 
 ;; Symbol Expr -> Bool
 (define (is-well-known-in? def-name ast)
-  #t) ;; TODO
+  (define (recur ast)
+    (is-well-known-in? def-name ast))
+
+  (match ast
+    [`(ref ,x)
+      (not (equal? x def-name))]
+    
+    [`(const ,_) #t]
+    [`(bless ,e0) (recur e0)]
+
+    [`(if ,g ,t ,e)
+     (and (recur g) (recur t) (recur e))]
+
+    [`(continue-dispatch ,es ...)
+     (andmap recur es)]
+    
+    [`(fail) #t]
+    [`(fail_to ,_) #t]
+
+    [`(,ell ,e0) #:when (eq? ell '|...|)
+     (recur e0)]
+    
+    [`(,(and ctor (or 'object 'subword)) ,es ...)
+     (andmap recur es)]
+
+    ;; Let
+    [`(let (ref ,x) ,rhs ,body)
+     (and (recur rhs) (recur body))]
+
+    ;; Slices
+    [`(|[]| ,es ...)
+     (andmap recur es)]
+
+    ;; Inner/outer defs
+    [`(def (,xs ...) ,body ...)
+     (andmap recur body)]
+
+    ;; Well-known call site
+    [`((ref ,fx) ,es ...)
+     #:when (equal? fx def-name)
+     (andmap recur es)]
+    
+    ;; Remaining untagged applications
+    [`(,es ...)
+     (andmap recur es)]))
+
+(module+ test
+  (require rackunit)
+  
+  (check-equal?
+    (is-well-known-in? 'fx
+      `(def ((ref gx) (ref fallback) (ref arg_count) (ref arg1))
+          ((ref fx) (ref none) (const 1) (ref arg))))
+    #t)
+
+  (check-equal?
+    (is-well-known-in? 'fx
+      `(def ((ref gx) (ref fallback) (ref arg_count) (ref arg1))
+          ((ref indirect_call) (ref none) (ref fx))))
+    #f)
+  
+  (define ast1
+    `(def ((ref gx) (ref fallback) (ref arg_count) (ref arg1)) (fail_to (ref hx))
+          (let (ref x)
+               (let (ref y) (const 5)
+                  (if (ref true)
+                      ((ref indirect_call) (ref none) (ref fx))
+                      ((ref fx) ((ref hx) (ref y)))))
+            (ref x))))
+
+  (check-equal? (is-well-known-in? 'fx ast1) #f)
+  (check-equal? (is-well-known-in? 'gx ast1) #t)
+  (check-equal? (is-well-known-in? 'hx ast1) #t)
+  (check-equal? (is-well-known-in? 'indirect_call ast1) #t)
+  (check-equal? (is-well-known-in? 'y ast1) #f))
