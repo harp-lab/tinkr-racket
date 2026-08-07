@@ -108,13 +108,14 @@
   ;; (SetOf (ListOf Symbol))
   (define fail-chains (get-fail-chains defs))
 
-  ;; (SetOf (ListOf Expr))
+  ;; (ListOf (ListOf Expr))
+  ;; Get the whole expr instead of just the names
   (define chains
-    (map (lambda (def-names)
-          (map (lambda (def-name)
-                  (get-def-with-name defs def-name))
-                def-names))
-         (set->list fail-chains)))
+    (set-map fail-chains 
+             (lambda (def-names)
+              (map (lambda (def-name)
+                      (get-def-with-name defs def-name))
+                    def-names))))
 
   ;; Retrieve first def names in order to pass to recursive calls
   (define def-names
@@ -123,36 +124,8 @@
 
   (define new-names (set-union names def-names))
 
-  ;; Recur on the bodies and add well-known annotations to each def
-  (define-values (chains+ well-known-for-defs)
-    (for/fold ([chains+ (set)]
-               [well-known-total #f])
-              ([chain chains])
-      (define-values (chain+ well-known-for-group)
-        (for/fold ([defs (list)]
-                   [well-known-for-group #f])
-                  ([def chain])
-          (match def
-            [`(def (,xs ...) ,(list-no-order `(free_vars ,(and free-refs `(ref ,free)) ...) other ...) ,body)
-              (define-values (body+ well-known-body) (annotate-well-known/ast body new-names))
-
-              ;; Well-known names actually referenced in the body (names not referenced in body are concidered well-known)
-              (define well-known-used-in-body (set-intersect well-known-body (list->set free)))
-              (define well-known-refs (map add-ref (set->list well-known-used-in-body)))
-
-              (values
-                (append
-                  defs
-                  (list `(def (,@xs) ((well_known ,@well-known-refs) (free_vars ,@free-refs) ,@other) ,body+)))
-                (if well-known-for-group
-                    (set-intersect well-known-for-group well-known-body)
-                    well-known-body))])))
-      
-      (values
-        (set-add chains+ chain+)
-        (if well-known-total
-            (set-intersect well-known-total well-known-for-group)
-            well-known-for-group))))
+  ;; Recur on the chains
+  (define-values (chains+ well-known-for-defs) (annotate-well-known/def-chains chains new-names))
   
   ;; Recur on the rest-ast
   (define-values (rest-ast+ well-known-rest-ast) (annotate-well-known/ast rest-ast new-names))
@@ -163,7 +136,7 @@
   ;; Add is_well_known annotations to first defs and flatten
   (define defs+
     (foldr append '()
-      (for/list ([chain chains+])
+      (for/list ([chain (in-list chains+)])
         (define first-def (car chain))
         (define first-def+
           (match first-def
@@ -182,3 +155,36 @@
   (values
     (nest-sibling-defs defs+ rest-ast+) ; Splice defs back together
     well-known-total))
+
+;; A Chain is a (ListOf (ListOf Expr))
+;; Chain (SetOf Symbol) -> (ValuesOf Chain (SetOf Symbol))
+;; Recur on the bodies and add well_known annotations (but not is_well_known annotations) to each def
+(define (annotate-well-known/def-chains chains names)
+  (for/fold ([chains+ (list)]
+             [well-known-total #f]) ;; Default to #f (instead of (set)) since we don't want to intersect with (set)
+            ([chain (in-list chains)])
+    (define-values (chain+ well-known-for-group)
+      (for/fold ([defs (list)]
+                 [well-known-for-group #f])
+                ([def (in-list chain)])
+        (match def
+          [`(def (,xs ...) ,(list-no-order `(free_vars ,(and free-refs `(ref ,free)) ...) other ...) ,body)
+            (define-values (body+ well-known-body) (annotate-well-known/ast body names))
+
+            ;; Well-known names actually referenced in the body (names not referenced in body are concidered well-known)
+            (define well-known-used-in-body (set-intersect well-known-body (list->set free)))
+            (define well-known-refs (map add-ref (set->list well-known-used-in-body)))
+
+            (values
+              (append
+                defs
+                (list `(def (,@xs) ((well_known ,@well-known-refs) (free_vars ,@free-refs) ,@other) ,body+)))
+              (if well-known-for-group
+                  (set-intersect well-known-for-group well-known-body)
+                  well-known-body))])))
+    
+    (values
+      (cons chain+ chains+)
+      (if well-known-total
+          (set-intersect well-known-total well-known-for-group)
+          well-known-for-group))))

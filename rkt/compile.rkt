@@ -6,7 +6,7 @@
 	 "build.rkt"
 	 "desugar.rkt"
 	 "simplify.rkt"
-	 "utils.rkt"
+	 "utils/utils.rkt"
    "free-vars.rkt"
    "annotate-well-known.rkt"
    "closure-convert.rkt"

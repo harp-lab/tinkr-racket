@@ -1,11 +1,25 @@
 #lang racket
 
-(require "utils.rkt"
+(require "utils/utils.rkt"
          "simplify.rkt"
          "helpers.rkt")
 
 (provide lift-well-known-defs)
 
+
+(struct chain
+  [defs         ;; (ListOf Expr)
+    free-vars    ;; (CollectionOf Symbol)
+    well-known]  ;; (SetOf Symbol)
+  #:transparent)
+
+;; (CollectionOf Chain) -> (ListOf Expr)
+(define (flatten-chains chains)
+  (foldl append '()
+          (for/list ([chain chains])
+            (chain-defs chain))))
+
+;; An Env is a (HashOf Symbol (ListOf Symbol))
 
 ;; AnnotatedWellKnownMod -> WellKnownModule
 (define (lift-well-known-defs mod)
@@ -28,7 +42,7 @@
       (set-add new-defs `(def (,@xs) ,annotations ,new-body))]
     [_ (error 'lift-well-known-defs)]))
 
-;; Expr (HashOf Symbol (ListOf Symbol)) -> (ValuesOf Expr (SetOf Expr))
+;; Expr Env -> (ValuesOf Expr (SetOf Expr))
 ;; Lifts well-known defs from the expression to the top level while using an
 ;; environment mapping well-known def names to the free variables it needs
 ;; (in order to transform later call-sites).
@@ -128,20 +142,8 @@
         (set-union fe-defs es-defs))]))
 
 
-;; Expr (HashOf Symbol (ListOf Symbol)) -> (ValuesOf Expr (SetOf Expr))
+;; Expr Env -> (ValuesOf Expr (SetOf Expr))
 (define (lift-well-known/inner-def def-ast env)
-
-  (struct def-group
-    [defs         ;; (ListOf Expr)
-     free-vars    ;; (CollectionOf Symbol)
-     well-known]  ;; (SetOf Symbol)
-    #:transparent)
-
-  ;; (ListOf DefGroup) -> (ListOf Expr)
-  (define (flatten-def-groups def-groups)
-    (foldl append '()
-           (map (lambda (g) (def-group-defs g)) def-groups)))
-
   ;; Unnest the nested sibling defs
   (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
 
@@ -149,13 +151,11 @@
   ;; is well-known and, if it is well-known, pass along all free variables for the entire chain.
   (define fail-chains (get-fail-chains defs))
 
-  ;; Combine free vars for each fail chain (and construct def groups)
-  (define def-groups
-    (for/fold ([def-groups (set)]) ;; TODO: refactor to for/set
-              ([chain fail-chains])
-      (define def-g
-        (for/fold ([curr-def-group (def-group (list) (set) (set))])
-                  ([def-name chain])
+  ;; Combine free vars for each fail chain (and construct chain structures)
+  (define chains
+    (for/set ([chain-names fail-chains])
+      (for/fold ([def-chain (chain (list) (set) (set))])
+                ([def-name chain-names])
 
           (define def (get-def-with-name defs def-name))
           
@@ -179,83 +179,42 @@
 
               (define total-free-vars
                 (set-subtract
-                  (set-union (list->set free-vars) (def-group-free-vars curr-def-group) free-vars-from-calls)
+                  (set-union (list->set free-vars) (chain-free-vars def-chain) free-vars-from-calls)
                   lifted-defs-to-remove))
 
               (define def+
-                `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,body))
+                `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,(remove-annotation annotations 'well_known) ,body))
 
-              (def-group (append (def-group-defs curr-def-group) (list def+))
-                         total-free-vars
-                         (set-union (def-group-well-known curr-def-group) (list->set well-known-def-calls)))])))
-      
-      (set-add def-groups def-g)))
+              (chain (append (chain-defs def-chain) (list def+))
+                     total-free-vars
+                     (set-union (chain-well-known def-chain) (list->set well-known-def-calls)))]))))
 
-  ;; Determine whether def groups are well-known
-  (define well-known-def-groups
-    (for/fold ([well-known-def-groups (set)])
-              ([curr-def-group def-groups])
-      (define first-def (car (def-group-defs curr-def-group)))
+  ;; Determine whether def chains are well-known
+  (define well-known-chains
+    (for/fold ([well-known-chains (set)])
+              ([curr-chain (in-set chains)])
+      (define first-def (car (chain-defs curr-chain)))
 
       (if (annotation-exists-on-def? first-def 'is_well_known)
-          (set-add well-known-def-groups curr-def-group)
-          well-known-def-groups)))
+          (set-add well-known-chains curr-chain)
+          well-known-chains)))
 
   (define well-known-def-names
-    (get-def-names
-      (foldl append '()
-            (map (lambda (g) (def-group-defs g)) (set->list well-known-def-groups)))))
-
-  (define non-well-known-def-groups (set-subtract def-groups well-known-def-groups))
-  (define non-well-known-defs (flatten-def-groups (set->list non-well-known-def-groups)))
+    (get-def-names (flatten-chains well-known-chains)))
 
   ;; Handle flow of free vars between well-known sibling calls
-  (define def-name->free-vars
-    (for/hash ([group (in-set well-known-def-groups)])
-      (define first-def-name (get-def-name (car (def-group-defs group))))
-      (values first-def-name (def-group-free-vars group))))
-
-  (define well-known-first-def-names
-    (get-def-names
-      (map (lambda (g) (car (def-group-defs g))) (set->list well-known-def-groups))))
-
-  ;; Adjacency list/hash representation of call graph
-  (define sibling-calls-graph
-    (for/hash ([group (in-set well-known-def-groups)])
-      (define first-def-name (get-def-name (car (def-group-defs group))))
-
-      ;; filter out any non-sibling calls
-      (define sibling-calls (list->set (filter (lambda (name) (set-member? well-known-first-def-names name))
-                                               (set->list (def-group-well-known group)))))
-
-      (values first-def-name sibling-calls)))
-
-  (define reachability-graph (transitive-closure sibling-calls-graph))
-
-  ;; Add the free vars of reachable well-known sibling calls to the def-group's free vars
-  (define well-known-def-groups+
-    (for/set ([group (in-set well-known-def-groups)])
-      (define first-def-name (get-def-name (car (def-group-defs group))))
-      (define reachable-calls (hash-ref reachability-graph first-def-name (set)))
-      (define reachable-calls-fvs
-        (foldl set-union (set)
-          (for/list ([call-name reachable-calls])
-            (hash-ref def-name->free-vars call-name (set)))))
-      
-      (def-group (def-group-defs group)
-                 (set-union (def-group-free-vars group) reachable-calls-fvs)
-                 (def-group-well-known group))))
+  (define well-known-chains+ (pass-free-vars-through-mutual-calls well-known-chains))
 
   ;; Lift well-known def groups
-  (define lifted-def-groups
-    (for/set ([curr-def-group well-known-def-groups+])
+  (define lifted-chains
+    (for/set ([curr-chain (in-set well-known-chains+)])
               
       ;; pick an arbitrary ordering for the free vars
-      (define group-free-vars (set->list (set-subtract (def-group-free-vars curr-def-group) well-known-def-names)))
+      (define group-free-vars (set->list (set-subtract (chain-free-vars curr-chain) well-known-def-names)))
       (define group-free-var-refs (map (lambda (x) `(ref ,x)) group-free-vars))
 
       (define new-lifted-defs
-        (for/list ([def (def-group-defs curr-def-group)])
+        (for/list ([def (chain-defs curr-chain)])
           (match def
             [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
 
@@ -264,44 +223,28 @@
 
               new-lifted-def])))
 
-      (def-group new-lifted-defs group-free-vars (set))))
+      (chain new-lifted-defs group-free-vars (set))))
 
-  (define lifted-defs (flatten-def-groups (set->list lifted-def-groups)))
+  (define lifted-defs (flatten-chains lifted-chains))
 
   ;; Modify the environment to include the new well-known defs' free vars
   (define env+
     (for/fold ([env+ env])
-              ([group lifted-def-groups])
-      (define first-def-name (get-def-name (car (def-group-defs group))))
+              ([group (in-set lifted-chains)])
+      (define first-def-name (get-def-name (car (chain-defs group))))
 
-      (hash-set env+ first-def-name (def-group-free-vars group))))
+      (hash-set env+ first-def-name (chain-free-vars group))))
 
   ;; Lift well-known defs from newly lifted defs bodies
-  (define lifted-defs+
-    (foldl set-union (set)
-      (for/list ([def lifted-defs])
-        (match def
-          [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
-            (define-values (new-body new-defs) (lift-well-known/ast body env+))
-            
-            (set-add
-              new-defs
-              `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,new-body))]))))
+  (define-values (lifted-defs+ lifted-defs-from-wk-defs) (lift-well-known/inner-def-bodies lifted-defs env+))
+  (define lifted-defs-final
+    (for/list ([lifted-def (in-list lifted-defs+)]) ;; Remove the is_well_known annotation: we don't need it anymore
+        (remove-annotation-on-def lifted-def 'is_well_known)))
 
   ;; Lift well-known defs from bodies of non-well-known-defs
-  (define-values (lifted-defs++ non-well-known-defs+)
-    (for/fold ([lifted-defs++ lifted-defs+]
-               [non-well-known-defs+ (list)])
-              ([def non-well-known-defs])
-      (match def
-        [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
-          (define-values (new-body new-defs) (lift-well-known/ast body env+))
-
-          (values
-            (set-union new-defs lifted-defs++)
-            (append
-              non-well-known-defs+
-              (list `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,new-body))))])))
+  (define non-well-known-chains (set-subtract chains well-known-chains))
+  (define non-well-known-defs (flatten-chains non-well-known-chains))
+  (define-values (non-well-known-defs+ lifted-defs-from-non-wk-defs) (lift-well-known/inner-def-bodies non-well-known-defs env+))
 
   ;; Lift well-known defs from rest-ast
   (define-values (rest-expr+ new-defs-from-rest) (lift-well-known/ast rest-ast env+))
@@ -310,8 +253,60 @@
 
   (values
     (nest-sibling-defs non-well-known-defs+ rest-expr+)
-    (set-union lifted-defs++ new-defs-from-rest)))
+    (set-union (list->set lifted-defs-final) lifted-defs-from-wk-defs lifted-defs-from-non-wk-defs new-defs-from-rest)))
 
+;; (ListOf Expr) Env -> (ValuesOf (ListOf Expr) (SetOf Expr))
+(define (lift-well-known/inner-def-bodies defs env)
+  (for/fold ([defs+ (list)]
+             [lifted-defs (set)])
+            ([def (in-list defs)])
+    (match def
+      [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
+        (define-values (new-body new-defs) (lift-well-known/ast body env))
+
+        (values
+          (append
+            defs+
+            (list `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,new-body)))
+          (set-union new-defs lifted-defs))])))
+
+
+;; (SetOf Chain) -> (SetOf Chain)
+(define (pass-free-vars-through-mutual-calls well-known-chains)
+  (define def-name->free-vars
+    (for/hash ([group (in-set well-known-chains)])
+      (define first-def-name (get-def-name (car (chain-defs group))))
+      (values first-def-name (chain-free-vars group))))
+
+  (define well-known-first-def-names
+    (get-def-names
+      (set-map well-known-chains (lambda (g) (car (chain-defs g))))))
+
+  ;; Adjacency list/hash representation of call graph
+  (define sibling-calls-graph
+    (for/hash ([group (in-set well-known-chains)])
+      (define first-def-name (get-def-name (car (chain-defs group))))
+
+      ;; filter out any non-sibling calls
+      (define sibling-calls (set-filter (lambda (name) (set-member? well-known-first-def-names name))
+                                        (chain-well-known group)))
+
+      (values first-def-name sibling-calls)))
+
+  (define reachability-graph (transitive-closure sibling-calls-graph))
+
+  ;; Add the free vars of reachable well-known sibling calls to the chain's free vars
+  (for/set ([group (in-set well-known-chains)])
+    (define first-def-name (get-def-name (car (chain-defs group))))
+    (define reachable-calls (hash-ref reachability-graph first-def-name (set)))
+    (define reachable-calls-fvs
+      (foldl set-union (set)
+        (for/list ([call-name reachable-calls])
+          (hash-ref def-name->free-vars call-name (set)))))
+    
+    (chain (chain-defs group)
+                (set-union (chain-free-vars group) reachable-calls-fvs)
+                (chain-well-known group))))
 
 ;; (HashOf Symbol (SetOf Symbol)) -> (HashOf Symbol (SetOf Symbol))
 ;; A naive implementation of finding the transitive closure of a graph.

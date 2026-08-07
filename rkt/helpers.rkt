@@ -9,6 +9,8 @@
          add-ref
          remove-ref
          get-annotation
+         remove-annotation
+         remove-annotation-on-def
          annotation-exists-on-def?
          annotation-exists?)
 
@@ -134,6 +136,20 @@
       [`(,(== annotation-name) ,vals ...) vals]
       [_ maybe])))
 
+;; (ListOf Expr) Symbol -> (ListOf Expr)
+(define (remove-annotation annotations annotation-name)
+  (for/foldr ([annotations+ (list)])
+             ([annotation annotations])
+    (match annotation
+      [`(,(== annotation-name) ,_ ...) annotations+]
+      [_ (cons annotation annotations+)])))
+
+;; Expr Symbol -> Expr
+(define (remove-annotation-on-def def-ast annotation-name)
+  (match def-ast
+    [`(def (,xs ...) ,annotations ,body)
+     `(def (,@xs) ,(remove-annotation annotations annotation-name) ,body)]))
+
 ;; Expr Symbol -> Bool
 (define (annotation-exists-on-def? def-ast annotation-name)
   (match def-ast
@@ -160,4 +176,10 @@
 
   (check-equal? (get-annotation ann1 'is_well_known) '())
   (check-equal? (get-annotation ann1 'free_vars) '((ref loop) (ref x)))
-  (check-equal? (get-annotation ann1 'abc) #f))
+  (check-equal? (get-annotation ann1 'abc) #f)
+  
+  (check-equal? (remove-annotation ann1 'well_known)
+                '((is_well_known)
+                  (free_vars (ref loop) (ref x))
+                  (fail_to (ref loop2))))
+  (check-equal? (remove-annotation ann1 'abc) ann1))
