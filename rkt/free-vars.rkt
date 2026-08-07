@@ -1,6 +1,7 @@
 #lang racket
 
-(require "simplify.rkt")
+(require "simplify.rkt"
+         "helpers.rkt")
 
 (provide annotate-with-free-vars)
 
@@ -89,24 +90,46 @@
       (recur-exprs es (lambda (es) `(|[]| ,@es)))]
 
     ;; Inner def
-    [`(def ((ref ,fx) ,(and params (or `(ref ,xs)
-                                       `(|...| (ref ,xs)))) ...) ,maybe-fail-to ... ,body ,more)
-      (define-values (body+ body-free) (free-vars/ast body))
-      (define-values (more+ more-free) (free-vars/ast more))
-
-      (define xs-to-remove (set-union (list->set xs) global-names reserved-bl-x)) ;; Remove params and global names
-      (define free-for-def (set-subtract body-free xs-to-remove))
-      (define free-for-def-refs (map (lambda (fv) `(ref ,fv)) (set->list free-for-def)))
-
-      ;; Note: intentionally keeping fx in the freevars for the annotation (for the case of closure conversion),
-      ;; but removing it for the total free vars.
-      (define total-free (set-subtract (set-union free-for-def more-free) (set fx)))
-
-      (values
-        `(def ((ref ,fx) ,@params) ((free_vars ,@free-for-def-refs) ,@maybe-fail-to) ,body+ ,more+)
-
-        total-free)]
+    [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body ,more)
+      (free-vars/inner-def ast)]
 
     ;; Untagged application
     [`(,es ...)
       (recur-exprs es (lambda (es) `(,@es)))]))
+
+
+;; Expr -> (ValuesOf Expr (SetOf Symbol))
+(define (free-vars/inner-def def-ast)
+  ;; Unnest the nested sibling defs
+  (define-values (defs rest-ast) (get-nested-sibling-defs def-ast))
+
+  (define-values (defs+ defs-free)
+    (for/foldr ([defs+ (list)]
+                [free-acc (set)])
+               ([def (in-list defs)])
+      (match def
+        [`(def ((ref ,fx) ,(and params (or `(ref ,xs)
+                                          `(|...| (ref ,xs)))) ...) ,maybe-fail-to ... ,body)
+
+          (define-values (body+ body-free) (free-vars/ast body))
+
+          ;; Note: intentionally keeping fx in the freevars for the annotation (for the case of closure conversion),
+          (define xs-to-remove (set-union (list->set xs) global-names reserved-bl-x)) ;; Remove params and global names
+          (define free-for-def (set-subtract body-free xs-to-remove))
+          (define free-for-def-refs (map (lambda (fv) `(ref ,fv)) (set->list free-for-def)))
+          
+          (values
+            (cons `(def ((ref ,fx) ,@params) ((free_vars ,@free-for-def-refs) ,@maybe-fail-to) ,body+) defs+)
+            (set-union free-acc free-for-def))])))
+
+  (define def-names
+    (for/set ([def (in-list defs)])
+      (get-def-name def)))
+
+  (define-values (rest-ast+ rest-ast-free) (free-vars/ast rest-ast))
+
+  (define total-free (set-subtract (set-union defs-free rest-ast-free) def-names))
+
+  (values
+    (nest-sibling-defs defs+ rest-ast+)
+    total-free))

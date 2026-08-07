@@ -2,8 +2,13 @@
 def (indirect_call f arg)
   (f arg)
 
+def (foldl f acc [] ...) acc
+def (foldl f acc [xs lsts ...] ...)
+  (foldl f (f xs ... acc) lsts ...)
+
 def (write `[node ,val ,cs ...])
-  "node: " + (write val) ;; TODO
+  let children (foldl (lambda (x acc) (+ acc " " (write x))) "" cs)
+  (+ "[" (write val) " " children "]")
 
 def (main)
   def (is_leaf `[node ,val]) true
