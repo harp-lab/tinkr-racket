@@ -132,8 +132,9 @@
 (define (lift-well-known/inner-def def-ast env)
 
   (struct def-group
-    [defs        ;; (ListOf Expr)
-     free-vars]  ;; (CollectionOf Variable)
+    [defs         ;; (ListOf Expr)
+     free-vars    ;; (CollectionOf Symbol)
+     well-known]  ;; (SetOf Symbol)
     #:transparent)
 
   ;; (ListOf DefGroup) -> (ListOf Expr)
@@ -153,7 +154,7 @@
     (for/fold ([def-groups (set)]) ;; TODO: refactor to for/set
               ([chain fail-chains])
       (define def-g
-        (for/fold ([curr-def-group (def-group (list) (set))])
+        (for/fold ([curr-def-group (def-group (list) (set) (set))])
                   ([def-name chain])
 
           (define def (get-def-with-name defs def-name))
@@ -185,10 +186,10 @@
                 `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,body))
 
               (def-group (append (def-group-defs curr-def-group) (list def+))
-                         total-free-vars)])))
+                         total-free-vars
+                         (set-union (def-group-well-known curr-def-group) (list->set well-known-def-calls)))])))
       
       (set-add def-groups def-g)))
-
 
   ;; Determine whether def groups are well-known
   (define well-known-def-groups
@@ -208,11 +209,46 @@
   (define non-well-known-def-groups (set-subtract def-groups well-known-def-groups))
   (define non-well-known-defs (flatten-def-groups (set->list non-well-known-def-groups)))
 
-  ;; TODO: for lifting mutually recurive defs, we will need to combine their free variables (before converting the param lists and call sites)
+  ;; Handle flow of free vars between well-known sibling calls
+  (define def-name->free-vars
+    (for/hash ([group (in-set well-known-def-groups)])
+      (define first-def-name (get-def-name (car (def-group-defs group))))
+      (values first-def-name (def-group-free-vars group))))
+
+  (define well-known-first-def-names
+    (get-def-names
+      (map (lambda (g) (car (def-group-defs g))) (set->list well-known-def-groups))))
+
+  ;; Adjacency list/hash representation of call graph
+  (define sibling-calls-graph
+    (for/hash ([group (in-set well-known-def-groups)])
+      (define first-def-name (get-def-name (car (def-group-defs group))))
+
+      ;; filter out any non-sibling calls
+      (define sibling-calls (list->set (filter (lambda (name) (set-member? well-known-first-def-names name))
+                                               (set->list (def-group-well-known group)))))
+
+      (values first-def-name sibling-calls)))
+
+  (define reachability-graph (transitive-closure sibling-calls-graph))
+
+  ;; Add the free vars of reachable well-known sibling calls to the def-group's free vars
+  (define well-known-def-groups+
+    (for/set ([group (in-set well-known-def-groups)])
+      (define first-def-name (get-def-name (car (def-group-defs group))))
+      (define reachable-calls (hash-ref reachability-graph first-def-name (set)))
+      (define reachable-calls-fvs
+        (foldl set-union (set)
+          (for/list ([call-name reachable-calls])
+            (hash-ref def-name->free-vars call-name (set)))))
+      
+      (def-group (def-group-defs group)
+                 (set-union (def-group-free-vars group) reachable-calls-fvs)
+                 (def-group-well-known group))))
 
   ;; Lift well-known def groups
   (define lifted-def-groups
-    (for/set ([curr-def-group well-known-def-groups])
+    (for/set ([curr-def-group well-known-def-groups+])
               
       ;; pick an arbitrary ordering for the free vars
       (define group-free-vars (set->list (set-subtract (def-group-free-vars curr-def-group) well-known-def-names)))
@@ -228,7 +264,7 @@
 
               new-lifted-def])))
 
-      (def-group new-lifted-defs group-free-vars)))
+      (def-group new-lifted-defs group-free-vars (set))))
 
   (define lifted-defs (flatten-def-groups (set->list lifted-def-groups)))
 
@@ -275,3 +311,23 @@
   (values
     (nest-sibling-defs non-well-known-defs+ rest-expr+)
     (set-union lifted-defs++ new-defs-from-rest)))
+
+
+;; (HashOf Symbol (SetOf Symbol)) -> (HashOf Symbol (SetOf Symbol))
+;; A naive implementation of finding the transitive closure of a graph.
+(define (transitive-closure graph)
+  (define (fixpoint graph previous)
+    (if (equal? graph previous)
+        graph
+        (fixpoint (reachable-step graph) graph)))
+
+  (fixpoint graph (hash)))
+
+(define (reachable-step graph)
+  (for/hash ([(h reachable-set) (in-hash graph)])
+    (define reachable-set+
+      (foldl set-union reachable-set
+        (for/list ([n (in-set reachable-set)])
+          (hash-ref graph n))))
+
+    (values h reachable-set+)))
