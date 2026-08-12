@@ -1,0 +1,111 @@
+table (program expr)
+
+union (expr (bound_var str)
+  (free_var str)
+  (num_lit int)
+  (str_lit str)
+  (sym_lit str)
+  (slice [expr])
+  (object str [expr])
+  (lam [str] expr)
+  (app expr [expr])
+  (if expr expr expr)
+  (let str expr expr)
+  (def str [str] expr expr)
+  (begin expr expr)
+  (notmodeled str))
+
+union (call_ctx (seed) (out_of_reach) app)
+union (heap_ctx seed out_of_reach app)
+union (val (closure lam call_ctx) (alloc expr heap_ctx) (idk))
+
+table (store str call_ctx val)
+table (heap expr heap_ctx int val)
+table (heap_from expr heap_ctx int [val])
+table (has_escaped val)
+table (has_escapeds [val])
+table (bind_params_to [str] [val] call_ctx)
+table (bind_params_to_idk [str] call_ctx)
+
+demand (eval expr call_ctx) val
+demand (evals [expr] call_ctx) [val]
+demand (apply val [val] call_ctx) val
+demand (freevar expr) str
+demand (freevars [expr]) str
+
+rule (freevar (bound_var x) x)
+rule (freevar (app ef es) x) <-- (freevar ef x) | (freevars es x)
+rule (freevar (slice es) x) <-- (freevars es x)
+rule (freevar (object tag es) x) <-- (freevars es x)
+rule (freevar (if ec et ee) x) <-- (freevar ec x) | (freevar et x) | (freevar ee x)
+rule (freevar (begin ea eb) x) <-- (freevar ea x) | (freevar eb x)
+rule (freevar (lam xs eb) x) <-- (freevar eb x) (= 0 (lmem xs x))
+rule (freevar (let y er eb) x) <-- ((freevar er x) | (freevar eb x)) (/= x y)
+rule (freevar (def f xs eb er) x) <-- (freevar eb x) (= 0 (lmem xs x)) (/= x f)
+rule (freevar (def f xs eb er) x) <-- (freevar er x) (/= x f)
+rule (freevars [e es ...] x) <-- (freevar e x) | (freevars es x)
+
+rule (eval (num_lit n) c (idk))
+rule (eval (str_lit s) c (idk))
+rule (eval (sym_lit s) c (idk))
+rule (eval (free_var x) c (idk))
+rule (eval (notmodeled what) c (idk))
+rule (eval (lam xs eb) c (closure (lam xs eb) c))
+rule (eval (bound_var x) c v) <-- (store x c v)
+
+rule (evals [] c [])
+rule (evals [e es ...] c [(eval e c) (evals es c) ...])
+
+rule (eval (slice es) c (alloc (slice es) c)) <-- (evals es c vs)
+rule (eval (object tag es) c (alloc (object tag es) c)) <-- (evals es c vs)
+
+rule (heap_from (slice es) c 0 vs) <-- (eval (slice es) c) (evals es c vs)
+rule (heap_from (object tag es) c 0 vs) <-- (eval (object tag es) c) (evals es c vs)
+rule (heap site hc i v) (heap_from site hc (+ i 1) vs) <-- (heap_from site hc i [v vs ...])
+
+rule (eval (app ef es) c v) <-- (eval ef c f) (evals es c vs) (apply f vs (app ef es) v)
+
+rule (apply (closure (lam xs eb) cb) vs c2 v) <-- (eval eb c2 v)
+rule (bind_params_to xs vs c2) <-- (apply (closure (lam xs eb) cb) vs c2)
+rule (store y c2 vy) <-- (apply (closure (lam xs eb) cb) vs c2) (freevar (lam xs eb) y) (store y cb vy)
+rule (apply (idk) vs c2 (idk))
+rule (has_escapeds vs) <-- (apply (idk) vs c2)
+rule (apply (alloc site hc) vs c2 (idk))
+rule (has_escapeds vs) (has_escaped (alloc site hc)) <-- (apply (alloc site hc) vs c2)
+
+rule (store x c v) (bind_params_to xs vs c) <-- (bind_params_to [x xs ...] [v vs ...] c)
+rule (has_escaped v) (bind_params_to [] vs c) <-- (bind_params_to [] [v vs ...] c)
+rule (store x c (idk)) (bind_params_to_idk xs c) <-- (bind_params_to_idk [x xs ...] c)
+
+rule (has_escaped v) (has_escapeds vs) <-- (has_escapeds [v vs ...])
+rule (has_escaped v) <-- (has_escaped (alloc site hc)) (heap site hc i v)
+rule (bind_params_to_idk xs (out_of_reach)) (eval eb (out_of_reach)) <-- (has_escaped (closure (lam xs eb) cb))
+rule (store y (out_of_reach) vy) <-- (has_escaped (closure (lam xs eb) cb)) (freevar (lam xs eb) y) (store y cb vy)
+rule (has_escaped v) <-- (has_escaped (closure (lam xs eb) cb)) (eval eb (out_of_reach) v)
+
+rule (eval (if ec et ee) c v) <-- (eval ec c vc) (eval et c v)
+rule (eval (if ec et ee) c v) <-- (eval ec c vc) (eval ee c v)
+
+rule (eval (let x er eb) c v) <-- (eval er c vr) (eval eb c v)
+rule (store x c vr) <-- (eval (let x er eb) c) (eval er c vr)
+
+rule (eval (def f xs eb er) c v) <-- (eval er c v)
+rule (store f c (closure (lam xs eb) c)) <-- (eval (def f xs eb er) c)
+
+rule (eval (begin ea eb) c v) <-- (eval ea c va) (eval eb c v)
+
+
+table (program_result val)
+table (callee expr call_ctx expr)
+table (idk_callee expr)
+table (several_callees expr)
+table (always_calls expr expr)
+
+rule (eval e (seed)) <-- (program e)
+rule (program_result v) <-- (program e) (eval e (seed) v)
+
+rule (callee (app ef es) c (lam xs eb)) <-- (eval (app ef es) c) (eval ef c (closure (lam xs eb) cb))
+rule (idk_callee (app ef es)) <-- (eval (app ef es) c) (eval ef c (idk))
+rule (idk_callee (app ef es)) <-- (eval (app ef es) c) (eval ef c (alloc site hc))
+rule (several_callees call) <-- (callee call c1 lm1) (callee call c2 lm2) (/= lm1 lm2)
+rule (always_calls call lm) <-- (callee call c lm) ~(several_callees call) ~(idk_callee call)
