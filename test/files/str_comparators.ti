@@ -1,0 +1,51 @@
+
+def (test_cases op k_ary)
+  let s1 "a"
+  let s2 "b"
+  let lst1 ["a" "a" "b"]
+  {
+    (debug_print (write (op s1 s1)))
+    (debug_print (write (op s1 s2)))
+    (debug_print (write (op s2 s1)))
+
+    if k_ary
+      {
+        (debug_print (write (op lst1 ...)))
+      }
+    none
+  }
+
+def (eq a ...)
+  (= a ...)
+
+def (neq a ...)
+  (/= a ...)
+
+def (lt a ...)
+  (< a ...)
+
+def (gt a ...)
+  (> a ...)
+
+def (lte a ...)
+  (<= a ...)
+
+def (gte a ...)
+  (>= a ...)
+
+def (main)
+{
+  ;; Can't pass =, <, etc. directly
+  (debug_print "=")
+  (test_cases eq false) ;; k-ary = does not work yet
+  (debug_print "/=")
+  (test_cases neq true)
+  (debug_print "<")
+  (test_cases lt true)
+  (debug_print "<=")
+  (test_cases lte true)
+  (debug_print ">")
+  (test_cases gt true)
+  (debug_print ">=")
+  (test_cases gte true)
+}

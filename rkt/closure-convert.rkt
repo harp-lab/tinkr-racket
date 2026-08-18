@@ -1,6 +1,6 @@
 #lang racket
 
-(require "utils.rkt"
+(require "utils/utils.rkt"
          "simplify.rkt"
          "helpers.rkt")
 
@@ -18,7 +18,7 @@
 (define apply-x '__apply__)
 (define escaped-apply-x (escape-id-for-C apply-x))
 
-;; AlphatizedModule -> CloModule
+;; AnnotatedFreeVarsMod -> CloModule
 (define (clo-convert-mod mod)
   (set! method-map (hash))
   (set! types-st (set))
@@ -40,7 +40,7 @@
      (define arg-xs (pad-params 4))
 
      (define apply-fun-ptr-def
-      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,arg-count-x) (ref ,fun-ptr-x) ,@arg-xs (... (ref ,rest-args-x)))
+      `(def ((ref ,(escape-id-for-C apply-fun-ptr-x)) (ref ,(gensymb 'fallback)) (ref ,arg-count-x) (ref ,fun-ptr-x) ,@arg-xs (... (ref ,rest-args-x))) ()
         ((ref _apply_on_slice) (ref ,fun-ptr-x) (ref ,arg-count-x) ,@arg-xs (ref ,rest-args-x))))
     
      (register-method! apply-x #f apply-fun-ptr-x)
@@ -224,15 +224,15 @@
     (for/fold ([chains (set)]) ;; (SetOf (ListOf Symbol))
               ([def defs])
       (match def
-        [`(def ((ref ,fx) ,params ...) ,maybe-fail-to ... ,body)
+        [`(def ((ref ,fx) ,params ...) ,annotations ,body)
+
+          (define ann-val (get-annotation annotations 'fail_to))
 
           ;; (or Symbol #f)
           (define maybe-fail-x
-            (if (null? maybe-fail-to)
-              #f
-              (match maybe-fail-to
-                [`((fail_to (ref ,fail-x)))
-                  fail-x])))
+            (match ann-val
+              [#f #f]
+              [`((ref ,fail-x)) fail-x]))
           
           (cond
             ;; Add the fail-x to an existing or new chain
@@ -376,25 +376,6 @@
     (set-union lifted-defs lifted-defs-from-bodies rest-new-defs)
     (set-subtract (set-union free-vars rest-free) def-names)))
 
-
-;; (ListOf Expr) -> (SetOf Symbol)
-(define (get-def-names defs)
-  (for/set ([def defs])
-      (get-def-name def)))
-
-;; (ListOf Expr) Symbol -> Expr
-(define (get-def-with-name defs fx)
-    (define (def-name-maches? def) (equal? fx (get-def-name def)))
-
-    (for/first ([def defs]
-                #:when (def-name-maches? def))
-      def))
-
-;; Expr -> Symbol
-(define (get-def-name def)
-  (match def
-    [`(def ((ref ,fx) ,params ...) ,body ...)
-      fx]))
 
 ;; Symbol (ListOf Symbol) Expr -> Expr
 (define (unpack-clo clo-slice-x xs body)

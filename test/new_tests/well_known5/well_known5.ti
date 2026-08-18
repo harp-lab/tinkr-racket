@@ -1,0 +1,38 @@
+
+def (indirect_call f arg)
+  (f arg)
+
+def (foldl f acc [] ...) acc
+def (foldl f acc [xs lsts ...] ...)
+  (foldl f (f xs ... acc) lsts ...)
+
+def (write `[node ,val ,cs ...])
+  let children (foldl (lambda (x acc) (+ acc " " (write x))) "" cs)
+  (+ "[" (write val) " " children "]")
+
+def (main)
+  def (is_leaf `[node ,val]) true
+  def (is_leaf `[node ,val ,c0 ,_ ...]) false
+  
+  def (children `[node ,val ,cs ...]) cs
+
+  let t1 `[node 1 `[node 2 `[node 4]
+                           `[node 5 `[node 6]]]
+                  `[node 3 `[node 7]]]
+
+  ;; well-known defs that need to pass around the is_leaf and children closures
+  def (count_leaves tree)
+    if (is_leaf tree)
+       1
+       (count_leaves_in_forest (children tree))
+  
+  def (count_leaves_in_forest forest)
+    if (is_empty forest)
+      0
+      (count_leaves (first forest)) + (count_leaves_in_forest (rest forest))
+
+  {
+    (debug_print (write (count_leaves t1)))
+    (debug_print (write (indirect_call is_leaf t1)))
+    (debug_print (write (indirect_call children t1)))
+  }

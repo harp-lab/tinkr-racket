@@ -3,13 +3,10 @@ def (map f []) []
 def (map f [x xs ...])
   [(f x) (map f xs) ...]
 
-def (apply fun arg)
-  (fun arg)
-
 def (main)
   def (fact 0) 1
   def (fact 1) 1
-  def (fact n) n * (apply fact n-1)
+  def (fact n) n * (fact n-1)
 
   def (f x)
     def (fact 2)
@@ -19,11 +16,11 @@ def (main)
       def (is_even x)
         if (= x 0) true
         if (= x 1) false
-        (apply is_odd (- x 1))
+        (is_odd (- x 1))
       def (is_odd x)
         if (= x 0) false
         if (= x 1) true
-        (apply is_even (- x 1))
+        (is_even (- x 1))
 
       def (fib 0) 0
       def (fib 1) 1
@@ -33,11 +30,11 @@ def (main)
         "<fact inside g>"
 
       if (is_even x)
-         (apply fact x)
-         (apply fib x)
+         (fact x)
+         (fib x)
     
     (map g x)
 
   {
-    (debug_print (write (apply f [0 1 2 3 4 5 6 7 8])))
+    (debug_print (write (f [0 1 2 3 4 5 6 7 8])))
   }

@@ -2,6 +2,10 @@
 def (g x y z)
   (+ x y z)
 
+;; `apply` forces `g` to become a closure
+def (apply fun arg)
+  (fun arg)
+
 def (f x y)
   def (g z)
     (+ x y z)
@@ -12,6 +16,8 @@ def (f x y)
     (debug_print (write (g 3)))     ;; 6
     (debug_print (write (g 3 4)))   ;; 10
     (debug_print (write (g 3 4 5))) ;; 12
+
+    (debug_print (write (apply g 3)))
   }
 
 def (main)

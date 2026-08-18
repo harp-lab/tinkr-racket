@@ -1,12 +1,15 @@
 
-def (apply fun arg)
-  (fun arg)
-
 def (main)
+  let is_even_base_case0 0
+  let is_even_base_case1 1
+
+  ;; Mututal recursion with both functions well-known
   def (is_even x)
-    if (= x 0) true
-    if (= x 1) false
+    if (= x is_even_base_case0) true
+    if (= x is_even_base_case1) false
     (is_odd (- x 1))
+
+  ;; Need to thread the fvs of `is_even` through `is_odd` when lifting
   def (is_odd x)
     if (= x 0) false
     if (= x 1) true
@@ -21,6 +24,6 @@ def (main)
     (debug_print (write (is_odd 2)))
     (debug_print (write (is_even 40)))
     (debug_print (write (is_odd 40)))
-    (debug_print (write (apply is_even 43)))
-    (debug_print (write (apply is_odd 43)))
+    (debug_print (write (is_even 43)))
+    (debug_print (write (is_odd 43)))
   }

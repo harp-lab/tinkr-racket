@@ -4,7 +4,7 @@
 (provide compile-link-module)
 
 
-(require "utils.rkt"
+(require "utils/utils.rkt"
 	 racket/system
 	 racket/hash
 	 racket/runtime-path)

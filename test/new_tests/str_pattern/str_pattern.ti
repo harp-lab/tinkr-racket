@@ -1,0 +1,25 @@
+
+def (f "hello")
+  (debug_print "hello!")
+def (f "world")
+  (debug_print "world!")
+def (f s)
+  (debug_print "none")
+
+def (g)
+  (debug_print "no apples")
+def (g "apple")
+  (debug_print "apple")
+def (g "apple" ...)
+  (debug_print "apples")
+
+def (main)
+{
+  (f "hello")
+  (f "world")
+  (f "some")
+
+  (g)
+  (g "apple")
+  (g "apple" "apple" "apple")
+}

@@ -6,7 +6,7 @@
 	 compile-bless)
 
 
-(require "utils.rkt")
+(require "utils/utils.rkt")
 
 
 (define (compile-bless-expr ast)

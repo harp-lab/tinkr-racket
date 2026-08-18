@@ -1,6 +1,6 @@
 #lang racket
 
-(require "utils.rkt"
+(require "utils/utils.rkt"
          "langs.rkt"
          "helpers.rkt")
 
@@ -293,13 +293,11 @@
         (define loop-x (gensymb 'loop))
         (define x-slice (gensymb 'x_slice))
         (define x-elm (gensymb 'x_elm))
-        
-        (define loop-fallback-x (gensymb 'fallback))
 
         (define enter-loop-e
-          (construct-application-with-fallback loop-x loop-fallback-x (append (list x) initial-accs)))
+          (construct-application-with-fallback loop-x fallback-x (append (list x) initial-accs)))
         (define recur-loop-e
-          (construct-application-with-fallback loop-x loop-fallback-x (append (list `((ref rest) (ref ,x-slice))) update-accs)))
+          (construct-application-with-fallback loop-x fallback-x (append (list `((ref rest) (ref ,x-slice))) update-accs)))
 
         (define loop-fail-e `(ref _fail)) ;; _fail is a special value to be returned on fail
 
@@ -307,7 +305,7 @@
           (replace-fails body loop-fail-e))
 
         (define loop-def
-          `(def ((ref ,loop-x) (ref ,loop-fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs)
+          `(def ((ref ,loop-x) (ref ,fallback-x) (ref ,arg-count-x) (ref ,x-slice) ,@pv-refs)
             (if ((ref is_empty) (ref none) (bless (const 1)) (ref ,x-slice))
               ,body+
 

@@ -12,7 +12,7 @@
          (struct-out build-options))
 
 
-(require "utils.rkt"
+(require "utils/utils.rkt"
 	 racket/system
 	 racket/hash
    racket/runtime-path

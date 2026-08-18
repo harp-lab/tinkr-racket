@@ -1,7 +1,28 @@
 #lang racket
 
 (provide get-nested-sibling-defs
-         nest-sibling-defs)
+         nest-sibling-defs
+         get-def-name
+         get-def-names
+         get-def-with-name
+         get-fail-chains
+         add-ref
+         remove-ref
+         get-annotation
+         set-annotation
+         remove-annotation
+         remove-annotation-on-def
+         annotation-exists-on-def?
+         annotation-exists?)
+
+
+;; Symbol -> Ref
+(define (add-ref x) `(ref ,x))
+
+;; Ref -> Symbol
+(define (remove-ref ref)
+  (match ref
+    [`(ref ,x) x]))
 
 ;; Expr -> (ValuesOf (ListOf Expr) Expr)
 ;; Split the nested sibling defs into a list of seperate defs (and a final rest-ast).
@@ -29,3 +50,151 @@
     (match def
       [`(def ((ref ,fx) ,params ...) ,body ...)
         `(def ((ref ,fx) ,@params) ,@body ,inner-ast)])))
+
+
+;; (ListOf Expr) -> (SetOf Symbol)
+(define (get-def-names defs)
+  (for/set ([def defs])
+      (get-def-name def)))
+
+;; (ListOf Expr) Symbol -> Expr
+(define (get-def-with-name defs fx)
+    (define (def-name-maches? def) (equal? fx (get-def-name def)))
+
+    (for/first ([def defs]
+                #:when (def-name-maches? def))
+      def))
+
+;; Expr -> Symbol
+(define (get-def-name def)
+  (match def
+    [`(def ((ref ,fx) ,params ...) ,body ...)
+      fx]))
+
+
+;; (ListOf Expr) -> (SetOf (ListOf Symbol))
+;; Can be used after free vars pass.
+;; A set of lists of def names which are linked together in a fail chain by fail_to.
+;; The first def in a chain is the entry point.
+(define (get-fail-chains defs)
+  (for/fold ([chains (set)])
+            ([def defs])
+    (match def
+      [`(def ((ref ,fx) ,params ...) ,annotations ,body)
+
+        (define ann-val (get-annotation annotations 'fail_to))
+
+        ;; (or Symbol #f)
+        (define maybe-fail-x
+          (match ann-val
+            [#f #f]
+            [`((ref ,fail-x)) fail-x]))
+
+        (cond
+          ;; Add the fail-x to an existing or new chain
+          [maybe-fail-x
+            (define-values (updated-chains updated)
+              (for/fold ([updated-chains (set)]
+                         [updated #f])
+                        ([chain chains])
+
+                (if (equal? (last chain) fx)
+                    ;; If this def is at the end of the chain then extend the existing chain with fail-x
+                    (values
+                      (set-add updated-chains (append chain (list maybe-fail-x))) ;; Extend existing chain
+                      #t)
+                    
+                    ;; Otherwise keep looking for the chain to extend
+                    (values
+                      (set-add updated-chains chain)
+                      updated))))
+            
+            (if updated
+                updated-chains ;; Extended an existing chain
+                (set-add chains (list fx maybe-fail-x)))] ;; Otherwise, start new chain
+          
+          ;; Either this def's name (i.e. fx) will have already been added to a chain or this def's
+          ;; name will be start a new singleton chain
+          ;; (this must be the last def in the chain since it doesn't have a fail-to)
+          [else
+            (define found-in-chain
+              (for/first ([chain chains]
+                          #:when (equal? (last chain) fx))
+                #t))
+
+            ;; If this def is at the end of the chain then we are done with this chain (so do nothing).
+            ;; Otherwise add the def to a new singleton chain.
+            (if found-in-chain
+                chains
+                (set-add chains (list fx)))])])))
+
+
+;; (ListOf Expr) Symbol -> (or (ListOf Any) #f)
+(define (get-annotation annotations annotation-name)
+  (for/fold ([maybe #f])
+            ([annotation annotations])
+    (match annotation
+      [`(,(== annotation-name) ,vals ...) vals]
+      [_ maybe])))
+
+;; (ListOf Expr) Symbol (ListOf Any) -> (ListOf Expr)
+;; Sets the annotation with the given name to the given values, replacing any
+;; existing annotation with that name (or adding it, if it doesn't yet exist).
+(define (set-annotation annotations annotation-name vals)
+  (cons `(,annotation-name ,@vals) (remove-annotation annotations annotation-name)))
+
+;; (ListOf Expr) Symbol -> (ListOf Expr)
+(define (remove-annotation annotations annotation-name)
+  (for/foldr ([annotations+ (list)])
+             ([annotation annotations])
+    (match annotation
+      [`(,(== annotation-name) ,_ ...) annotations+]
+      [_ (cons annotation annotations+)])))
+
+;; Expr Symbol -> Expr
+(define (remove-annotation-on-def def-ast annotation-name)
+  (match def-ast
+    [`(def (,xs ...) ,annotations ,body)
+     `(def (,@xs) ,(remove-annotation annotations annotation-name) ,body)]))
+
+;; Expr Symbol -> Bool
+(define (annotation-exists-on-def? def-ast annotation-name)
+  (match def-ast
+    [`(def (,xs ...) ,annotations ,body)
+      (annotation-exists? annotations annotation-name)]))
+
+;; (ListOf Expr) Symbol -> Bool
+(define (annotation-exists? annotations annotation-name)
+  (for/first ([annotation annotations]
+              #:when (match annotation
+                        [`(,(== annotation-name) _ ...) #t]
+                        [_ #f]))
+    #t))
+
+
+(module+ test
+  (require rackunit)
+  
+  (define ann1
+    '((is_well_known)
+      (well_known (ref loop))
+      (free_vars (ref loop) (ref x))
+      (fail_to (ref loop2))))
+
+  (check-equal? (get-annotation ann1 'is_well_known) '())
+  (check-equal? (get-annotation ann1 'free_vars) '((ref loop) (ref x)))
+  (check-equal? (get-annotation ann1 'abc) #f)
+  
+  (check-equal? (remove-annotation ann1 'well_known)
+                '((is_well_known)
+                  (free_vars (ref loop) (ref x))
+                  (fail_to (ref loop2))))
+  (check-equal? (remove-annotation ann1 'abc) ann1)
+
+  (check-equal? (set-annotation ann1 'free_vars '((ref y)))
+                '((free_vars (ref y))
+                  (is_well_known)
+                  (well_known (ref loop))
+                  (fail_to (ref loop2))))
+  (check-equal? (set-annotation ann1 'abc '((ref y)))
+                (cons '(abc (ref y)) ann1)))

@@ -1,6 +1,6 @@
 #lang racket
 
-(require "utils.rkt")
+(require "utils/utils.rkt")
 (require "langs.rkt")
 (require "helpers.rkt")
 
@@ -12,6 +12,7 @@
 
          ;; TODO: we probably shouldn't export these
          global-names
+         add-to-global-names!
          soft-globals
          reserved-bl-x
 
@@ -21,6 +22,11 @@
 
 
 (define global-names 0) ;; (set)
+
+;; (SetOf Symbol) -> Void
+(define (add-to-global-names! new-names)
+  (set! global-names (set-union global-names new-names)))
+
 ;; Free names that came from closure-chain fallbacks: if such a name
 ;; resolves to nothing at link time, the module demands a runtime dispatch
 ;; error at that point (never a shim to an assumed C function).
@@ -215,14 +221,15 @@
   (define noarg-x '_u__noarg)
   (define standard-arg-count (- bless-arg-count 3)) ;; Number of blessed args not including the overflow slice or fallback or arg-count
   
-  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,maybe-fail-to ... ,body) ast)
+  (match-define `(def ((ref ,fname) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body) ast)
 
+  (define ann-val (get-annotation annotations 'fail_to))
+
+  ;; (or Symbol #f)
   (define maybe-fail-x
-    (if (null? maybe-fail-to)
-      #f
-      (match maybe-fail-to
-        [`((fail_to (ref ,fail-x)))
-          fail-x])))
+    (match ann-val
+      [#f #f]
+      [`((ref ,fail-x)) fail-x]))
 
   ;; (ListOf Expr) Int (or Symbol #f) -> (ValuesOf (ListOf Symbol) Lambda)
   ;; Processes def param list to cap the number of params.

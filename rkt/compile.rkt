@@ -6,8 +6,11 @@
 	 "build.rkt"
 	 "desugar.rkt"
 	 "simplify.rkt"
-	 "utils.rkt"
-   "closure-convert.rkt")
+	 "utils/utils.rkt"
+   "free-vars.rkt"
+   "annotate-well-known.rkt"
+   "closure-convert.rkt"
+   "well-known.rkt")
 
 
 (provide compile-one) 
@@ -44,7 +47,10 @@
   (compile-step ".ti" ".ti_loaded" load-module-pass)
   (compile-step ".ti_loaded" ".core" desugar-pass)
   (compile-step ".core" ".core_alpha" alphatize-pass)
-  (compile-step ".core_alpha" ".core_clo" clo-convert-pass)
+  (compile-step ".core_alpha" ".core_free" annotate-free-vars-pass)
+  (compile-step ".core_free" ".core_ann_well_known" annotate-well-known-pass)
+  (compile-step ".core_ann_well_known" ".core_well_known" lift-well-known-defs-pass)
+  (compile-step ".core_well_known" ".core_clo" clo-convert-pass)
   (compile-step ".core_clo" ".core_limited_params" limit-def-params-pass)
   (compile-step ".core_limited_params" ".core_anf" anf-convert-pass)
   (compile-step ".core_anf" ".core_cps" cps-convert-pass)
@@ -89,30 +95,37 @@
   mod+)
 
 
+(define (annotate-free-vars-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (annotate-with-free-vars mod))
+
+(define (annotate-well-known-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (annotate-well-known mod))
+
+(define (lift-well-known-defs-pass src-path)
+  (define mod (with-input-from-file src-path read))
+  (lift-well-known-defs mod))
+
 (define (clo-convert-pass src-path)
   (define mod (with-input-from-file src-path read))
   (clo-convert-mod mod))
-
 
 (define (limit-def-params-pass src-path)
   (define mod (with-input-from-file src-path read))
   (limit-def-params-in-mod mod))
 
-
 (define (anf-convert-pass src-path)
   (define mod (with-input-from-file src-path read))
   (anf-convert-mod mod))
-
 
 (define (cps-convert-pass src-path)
   (define mod (with-input-from-file src-path read))
   (cps-convert-mod mod))
 
-
 (define (lower-pass src-path)
   (define mod (with-input-from-file src-path read))
   (lower-mod mod))
-
 
 (define (compile-bl-decls-pass src-path)
   (define mod (with-input-from-file src-path read))

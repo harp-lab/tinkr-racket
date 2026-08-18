@@ -1,11 +1,14 @@
 #lang racket
 
 
-(require "lexer.rkt")
-(require "parser.rkt")
+(require "../lexer.rkt")
+(require "../parser.rkt")
 
 (require racket/runtime-path)
 (require racket/system racket/file)
+
+(require "set-utils.rkt")
+(provide (all-from-out "set-utils.rkt"))
 
 (provide gensymb
 	 sym-append
