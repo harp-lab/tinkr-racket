@@ -35,6 +35,9 @@ def (write s=`[str ,len_hash ,cstr])
   s
 
 
+def (= `[str ,len_hash0 ,cstr0] `[str ,len_hash1 ,cstr1])
+  (bless (equal len_hash0 len_hash1))
+
 
 
 blessed (cstr_println s)

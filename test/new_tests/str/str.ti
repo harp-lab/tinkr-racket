@@ -1,7 +1,4 @@
 
-;; Failing:
-;;  equality
-
 def (main)
 {
   let a "hello"
@@ -17,5 +14,6 @@ def (main)
     (debug_print (write (= a b)))
     (debug_print (write (= a "hello")))
     (debug_print (write (= "hello" "hello")))
+    (debug_print (write (= "hello" "world")))
   }
 }
