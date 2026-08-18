@@ -9,6 +9,7 @@
          add-ref
          remove-ref
          get-annotation
+         set-annotation
          remove-annotation
          remove-annotation-on-def
          annotation-exists-on-def?
@@ -136,6 +137,12 @@
       [`(,(== annotation-name) ,vals ...) vals]
       [_ maybe])))
 
+;; (ListOf Expr) Symbol (ListOf Any) -> (ListOf Expr)
+;; Sets the annotation with the given name to the given values, replacing any
+;; existing annotation with that name (or adding it, if it doesn't yet exist).
+(define (set-annotation annotations annotation-name vals)
+  (cons `(,annotation-name ,@vals) (remove-annotation annotations annotation-name)))
+
 ;; (ListOf Expr) Symbol -> (ListOf Expr)
 (define (remove-annotation annotations annotation-name)
   (for/foldr ([annotations+ (list)])
@@ -182,4 +189,12 @@
                 '((is_well_known)
                   (free_vars (ref loop) (ref x))
                   (fail_to (ref loop2))))
-  (check-equal? (remove-annotation ann1 'abc) ann1))
+  (check-equal? (remove-annotation ann1 'abc) ann1)
+
+  (check-equal? (set-annotation ann1 'free_vars '((ref y)))
+                '((free_vars (ref y))
+                  (is_well_known)
+                  (well_known (ref loop))
+                  (fail_to (ref loop2))))
+  (check-equal? (set-annotation ann1 'abc '((ref y)))
+                (cons '(abc (ref y)) ann1)))

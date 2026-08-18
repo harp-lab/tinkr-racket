@@ -182,8 +182,14 @@
                   (set-union (list->set free-vars) (chain-free-vars def-chain) free-vars-from-calls)
                   lifted-defs-to-remove))
 
+              ;; Update the free_vars annotation to include the newly found free vars
+              ;; from well-known call sites (free-vars-from-calls), so it stays accurate
+              ;; for reuse by later passes (e.g. closure conversion).
+              (define annotations+
+                (set-annotation annotations 'free_vars (map add-ref (set->list total-free-vars))))
+
               (define def+
-                `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,(remove-annotation annotations 'well_known) ,body))
+                `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations+ ,body))
 
               (chain (append (chain-defs def-chain) (list def+))
                      total-free-vars
@@ -238,8 +244,8 @@
   ;; Lift well-known defs from newly lifted defs bodies
   (define-values (lifted-defs+ lifted-defs-from-wk-defs) (lift-well-known/inner-def-bodies lifted-defs env+))
   (define lifted-defs-final
-    (for/list ([lifted-def (in-list lifted-defs+)]) ;; Remove the is_well_known annotation: we don't need it anymore
-        (remove-annotation-on-def lifted-def 'is_well_known)))
+    (for/list ([lifted-def (in-list lifted-defs+)]) ;; Remove the is_well_known and free_var annotation
+        (remove-annotation-on-def (remove-annotation-on-def lifted-def 'is_well_known) 'free_vars)))
 
   ;; Lift well-known defs from bodies of non-well-known-defs
   (define non-well-known-chains (set-subtract chains well-known-chains))
@@ -264,10 +270,26 @@
       [`(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,params ...) ,annotations ,body)
         (define-values (new-body new-defs) (lift-well-known/ast body env))
 
+        ;; This def's well-known calls may now resolve to defs which were only just lifted
+        ;; at this same level (i.e. mutual/recursive calls) and so weren't yet in `env` when free_vars was last updated.
+        ;; Fold in the free vars those calls need now that `env` has them.
+        (define well-known-def-calls (map remove-ref (or (get-annotation annotations 'well_known) (list))))
+        (define free-vars-from-calls
+          (for/fold ([free-vars-from-calls (set)])
+                    ([name well-known-def-calls])
+            (set-union free-vars-from-calls (list->set (hash-ref env name (list))))))
+
+        ;; Update free_vars annotation and remove well_known annotation
+        (define existing-free-vars (map remove-ref (or (get-annotation annotations 'free_vars) (list))))
+        (define annotations+
+          (set-annotation (remove-annotation annotations 'well_known)
+                           'free_vars
+                           (map add-ref (set->list (set-union (list->set existing-free-vars) free-vars-from-calls)))))
+
         (values
           (append
             defs+
-            (list `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations ,new-body)))
+            (list `(def ((ref ,fx) (ref ,fallback-x) (ref ,arg-count-x) ,@params) ,annotations+ ,new-body)))
           (set-union new-defs lifted-defs))])))
 
 

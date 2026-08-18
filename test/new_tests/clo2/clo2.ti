@@ -1,4 +1,7 @@
 
+def (apply fun arg)
+  (fun arg)
+
 def (main)
   def (is_even x)
     if (= x 0) true
@@ -18,6 +21,6 @@ def (main)
     (debug_print (write (is_odd 2)))
     (debug_print (write (is_even 40)))
     (debug_print (write (is_odd 40)))
-    (debug_print (write (is_even 43)))
-    (debug_print (write (is_odd 43)))
+    (debug_print (write (apply is_even 43)))
+    (debug_print (write (apply is_odd 43)))
   }
