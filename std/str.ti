@@ -7,7 +7,8 @@ bless ("#include <iostream>")
 
 
 
-
+def (is_str `[str ,len_hash ,cstr]) true
+def (is_str x) false
 
 
 def (_init_from_cstr _ cstr)

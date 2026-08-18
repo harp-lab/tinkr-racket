@@ -1,0 +1,127 @@
+
+
+;; Helpers:
+
+;; A Variable is a String
+def (is_var x) (is_str x)
+
+def (write `[lambda [,x] ,e])
+  "[lambda [" + (write x) + "] " + (write e) + "]"
+
+def (list_remove [] elm) []
+def (list_remove [x rest ...] elm)
+  if (= x elm)
+     (list_remove rest elm)
+     [x] + (list_remove rest elm)
+
+def (deduplicate []) []
+def (deduplicate [x rest ...])
+  if (is_member rest x)
+     (deduplicate rest)
+     [x] + (deduplicate rest)
+
+def (list_union lst1 lst2)
+  (deduplicate (+ lst1 lst2))
+
+def (is_member [] elm) false
+def (is_member [x rest ...] elm)
+  if (= x elm)
+     true
+     (is_member rest elm)
+
+;; Main:
+
+def (trace exp order) (trace exp order {2 ^ 12})
+def (trace exp "AOE" max_steps) (take_steps exp step_AOE max_steps)
+
+;; Expr Function Int -> (ListOf Expr)
+def (take_steps exp take_step max_steps)
+  if (= max_steps 0) false
+
+  let next (take_step exp)
+  if (not next) [exp]
+
+  let res (take_steps next take_step (- max_steps 1))
+  if res
+     (+ [exp] res)
+     false
+
+;; Expr -> (or #f Expr)
+def (step_AOE `[lambda [,x] ,e])
+  ;; Look for beta redex under lambda
+  let result (step_AOE e)
+  if result
+     `[lambda ,[x] ,result]
+     false
+def (step_AOE exp=[ef ea])
+  ;; Look down right, then left, then the whole application
+  let try_down_right (step_AOE ea)
+  if try_down_right [ef try_down_right]
+
+  let try_down_left (step_AOE ef)
+  if try_down_left [try_down_left ea]
+
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp false))
+
+  false
+def (step_AOE (? x is_var)) false
+
+def (free (? x is_var)) [x]
+def (free `[lambda [,x] ,eb]) (list_remove (free eb) x)
+def (free [ef ea]) (list_union (free ef) (free ea))
+
+;; Expr Variable Expr -> (or Expr false)
+;; Implements capture-avoiding substitution. Returns false if substitution
+;; failed because of a problamatic free variable in ea (i.e. an alpha-renaming
+;; needs to be done), unless force_alpha is set to true (then the required alpha-renaming
+;; will automatically be done).
+def (subst exp x ea force_alpha)
+  let free_vars_ea (free ea)
+
+  def (recur (? y is_var)) when (= x y)
+    ea
+  def (recur (? y is_var)) y
+  def (recur `[lambda [,y] ,e]) when (= x y)
+    `[lambda ,[y] ,e]
+  def (recur `[lambda [,y] ,e]) when (is_member free_vars_ea y)
+    ;;if force_alpha
+       ;;(recur (element_or_false (alpha_convert exp)))
+       false
+  def (recur `[lambda [,y] ,e])
+    let e_new (recur e)
+    if e_new
+       `[lambda ,[y] ,e_new]
+       false
+  def (recur [e1 e2])
+    let e1_new (recur e1)
+    let e2_new (recur e2)
+    if (& e1_new e2_new)
+       [e1_new e2_new]
+       false
+
+  (recur exp)
+
+def (is_beta_redex [`[lambda [,x] ,eb] ea]) true
+def (is_beta_redex exp) false
+
+;; Expr Boolean -> (ListOf Expr)
+def (beta_reduce [`[lambda [,x] ,eb] ea] force_alpha)
+  let eb_new (subst eb x ea force_alpha)
+  if eb_new
+     [eb_new]
+     []
+def (beta_reduce exp force_alpha) []
+
+;; (ListOf Element) -> (or Element false)
+def (element_or_false lst)
+  if (is_empty lst)
+     false
+     (first lst)
+
+def (main)
+{
+  ;;let t (trace `[lambda ,["x"] ,"x"] "AOE")
+  let t (trace [`[lambda ,["x"] ,["x" "x"]] `[lambda ,["x"] ,"x"]] "AOE")
+  ;;let t (trace ["x" "x"] "AOE")
+  (debug_print (write t))
+}
