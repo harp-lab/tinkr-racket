@@ -32,7 +32,8 @@ PATH_TO_ERROR_LOG = os.path.join(PATH_TO_TI_DIR, "error.log")
 TEST_DIR_TESTS = "tests"
 TEST_DIR_NEW_TESTS = "new_tests"
 TEST_DIR_VIEW_TESTS = "view_tests"
-TEST_DIRS = [TEST_DIR_TESTS, TEST_DIR_NEW_TESTS, TEST_DIR_VIEW_TESTS]
+TEST_DIR_PROGRAMS = "programs"
+TEST_DIRS = [TEST_DIR_TESTS, TEST_DIR_NEW_TESTS, TEST_DIR_VIEW_TESTS, TEST_DIR_PROGRAMS]
 
 def _test_compiler(file, tests, racket_path):
     b_stdout, _, _ = runcmdsafe(

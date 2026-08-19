@@ -1,0 +1,5 @@
+[[[[lambda [a] a] [lambda [b] b]] [[lambda [c] c] [lambda [d] d]]] [[[lambda [a] a] [lambda [b] b]] [lambda [d] d]] [[lambda [b] b] [lambda [d] d]] [lambda [d] d]]
+[[lambda [z] [[[lambda [a] a] [lambda [b] b]] [[lambda [c] c] [lambda [d] d]]]] [lambda [z] [[[lambda [a] a] [lambda [b] b]] [lambda [d] d]]] [lambda [z] [[lambda [b] b] [lambda [d] d]]] [lambda [z] [lambda [d] d]]]
+[[[lambda [x] [lambda [y] x]] y] [lambda [y] x]]
+false
+[[[lambda [x] [lambda [y] y]] [[lambda [z] [z z]] [lambda [z] [z z]]]] [lambda [y] y]]

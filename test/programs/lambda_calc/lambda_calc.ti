@@ -1,6 +1,6 @@
 
 
-;; Helpers:
+;; ----- Helpers -----
 
 ;; A Variable is a String
 def (is_var x) (is_str x)
@@ -29,10 +29,19 @@ def (is_member [x rest ...] elm)
      true
      (is_member rest elm)
 
-;; Main:
+;; (ListOf Element) -> (or Element false)
+def (element_or_false lst)
+  if (is_empty lst)
+     false
+     (first lst)
+
+;; ----- Main -----
 
 def (trace exp order) (trace exp order {2 ^ 12})
 def (trace exp "AOE" max_steps) (take_steps exp step_AOE max_steps)
+def (trace exp "NOE" max_steps) (take_steps exp step_NOE max_steps)
+def (trace exp "CBV" max_steps) (take_steps exp step_CBV max_steps)
+def (trace exp "CBN" max_steps) (take_steps exp step_CBN max_steps)
 
 ;; Expr Function Int -> (ListOf Expr)
 def (take_steps exp take_step max_steps)
@@ -46,7 +55,9 @@ def (take_steps exp take_step max_steps)
      (+ [exp] res)
      false
 
-;; Expr -> (or #f Expr)
+;; ----- Step Methods -----
+
+;; Expr -> (or false Expr)
 def (step_AOE `[lambda [,x] ,e])
   ;; Look for beta redex under lambda
   let result (step_AOE e)
@@ -61,10 +72,63 @@ def (step_AOE exp=[ef ea])
   let try_down_left (step_AOE ef)
   if try_down_left [try_down_left ea]
 
-  if (is_beta_redex exp) (element_or_false (beta_reduce exp false))
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
 
   false
 def (step_AOE (? x is_var)) false
+
+;; Expr -> (or false Expr)
+def (step_NOE `[lambda [,x] ,e])
+  ;; Look for beta redex under lambda
+  let result (step_NOE e)
+  if result
+     `[lambda ,[x] ,result]
+     false
+def (step_NOE exp=[ef ea])
+  ;; Look at the whole application, then down left, then right
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  let try_down_left (step_NOE ef)
+  if try_down_left [try_down_left ea]
+
+  let try_down_right (step_NOE ea)
+  if try_down_right [ef try_down_right]
+
+  false
+def (step_NOE (? x is_var)) false
+
+;; Expr -> (or false Expr)
+def (step_CBV `[lambda [,x] ,e]) false ;; Don't reduce under lambda
+def (step_CBV exp=[ef ea])
+  ;; Look down right, then left, then the whole application
+  let try_down_right (step_CBV ea)
+  if try_down_right [ef try_down_right]
+
+  let try_down_left (step_CBV ef)
+  if try_down_left [try_down_left ea]
+
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  false
+def (step_CBV (? x is_var)) false
+
+;; Expr -> (or false Expr)
+def (step_CBN `[lambda [,x] ,e]) false ;; Don't reduce under lambda
+def (step_CBN exp=[ef ea])
+  ;; Look at the whole application, then down left, then right
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  let try_down_left (step_CBN ef)
+  if try_down_left [try_down_left ea]
+
+  let try_down_right (step_CBN ea)
+  if try_down_right [ef try_down_right]
+
+  false
+def (step_CBN (? x is_var)) false
+
+
+;; ----- Reduction and Substitution Helpers -----
 
 def (free (? x is_var)) [x]
 def (free `[lambda [,x] ,eb]) (list_remove (free eb) x)
@@ -120,11 +184,6 @@ def (beta_reduce [`[lambda [,x] ,eb] ea] force_alpha)
      []
 def (beta_reduce exp force_alpha) []
 
-;; (ListOf Element) -> (or Element false)
-def (element_or_false lst)
-  if (is_empty lst)
-     false
-     (first lst)
 
 def (main)
 {
@@ -134,6 +193,8 @@ def (main)
   let b "b"
   let c "c"
   let d "d"
+  let x "x"
+  let y "y"
   let z "z"
 
   let p1 [[(lam [a] a) (lam [b] b)]
@@ -141,11 +202,15 @@ def (main)
   let p2 (lam [z]
             [[(lam [a] a) (lam [b] b)]
              [(lam [c] c) (lam [d] d)]])
+  let p3 [(lam [x] (lam [y] x)) y]
+  let p4 [(lam [x] (lam [y] y))
+	        [(lam [z] [z z]) (lam [z] [z z])]]
 
-  let t1 (trace p1 "AOE")
-  let t2 (trace p2 "AOE")
   {
-    (debug_print (write t1))
-    (debug_print (write t2))
+    (debug_print (write (trace p1 "AOE")))
+    (debug_print (write (trace p2 "AOE")))
+    (debug_print (write (trace p3 "NOE")))
+    (debug_print (write (trace p4 "CBV"))) ;; Expect false (i.e. it loops forever)
+    (debug_print (write (trace p4 "CBN")))
   }
 }

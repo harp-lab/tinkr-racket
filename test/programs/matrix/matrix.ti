@@ -52,6 +52,15 @@ def (write `[mat [,xs ...] ...])
   
   "`[mat" + main_str + "]"
 
+def (+ `[mat [,xs ...] ...] `[mat [,ys ...] ...])
+  def (add x y)
+    (+ x y)
+
+  (make_mat
+    (map (lambda (x_rows y_rows)
+          (map add x_rows y_rows))
+        xs ys) ...)
+
 def (main)
 {
   let I (make_mat [1 0]
@@ -61,11 +70,15 @@ def (main)
   let B (make_mat [31 4 5546]
                   [6 464587 7]
                   [6123 4 7])
+  let C (make_mat [1 2]
+                  [3 4])
   {
     (debug_print (write (is_mat [1 2 3])))
     (debug_print (write (is_mat I)))
     (debug_print (write I))
     (debug_print (write A))
     (debug_print (write B))
+    (debug_print (write C))
+    (debug_print (write (+ I C)))
   }
 }
