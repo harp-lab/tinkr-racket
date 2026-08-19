@@ -114,7 +114,9 @@ blessed (str_len_hash s len h)
   len0 = (u64plus len 1)
   
   if (eq (deref (cstr_t s0)) 0)
-    return (cons_u32 len0 h0)
+    ;; Set the tag as 1 (could be a different tag) in order for the len_hash to be treated as a regular tagged value.
+    ;; Untagged values can cause bugs elsewhere, for example, with object/slice delimiters.
+    return (set_tag (cons_u32 len0 h0) 1)
     return (str_len_hash s0 len0 h0)
 }
 

@@ -65,10 +65,10 @@ blessed (get_object_tag x)
 blessed (get_object_slice x)
   ;; obj is tagged 001, slices 010
   (cond (bit_or (eq 0 (deref (plus 1 (anys_t (top61 x)))))
-		(eq 255 (u64bit_and 255
-				    (deref (plus 1 (anys_t (top61 x)))))))
-	_empty
-	(u64plus 2 (plus 1 (anys_t (top61 x)))))
+                (eq 255 (u64bit_and 255
+                                    (deref (plus 1 (anys_t (top61 x)))))))
+        _empty
+        (u64plus 2 (plus 1 (anys_t (top61 x)))))
 
 ;; MutableObject UntaggedInt Slice -> UntaggedInt
 ;; Initalizes the given object `mut_obj` with the values in `vals`.
@@ -225,7 +225,7 @@ def (_gather a0 a1 a2 a3 a4 a5)
   ;; Always treat a5 as variadic
   if (bless (equal a5 _noarg))
     base_slice
-    base_slice + a5
+    (_slice_concat base_slice a5)
 
 ;; Vtable lookup and dispatch
 blessed (vtable_lookup arg0 pos)

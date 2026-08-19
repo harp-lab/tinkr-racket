@@ -75,6 +75,7 @@ def (free [ef ea]) (list_union (free ef) (free ea))
 ;; failed because of a problamatic free variable in ea (i.e. an alpha-renaming
 ;; needs to be done), unless force_alpha is set to true (then the required alpha-renaming
 ;; will automatically be done).
+def (subst exp x ea) (subst exp x ea false)
 def (subst exp x ea force_alpha)
   let free_vars_ea (free ea)
 
@@ -84,8 +85,8 @@ def (subst exp x ea force_alpha)
   def (recur `[lambda [,y] ,e]) when (= x y)
     `[lambda ,[y] ,e]
   def (recur `[lambda [,y] ,e]) when (is_member free_vars_ea y)
-    ;;if force_alpha
-       ;;(recur (element_or_false (alpha_convert exp)))
+    if force_alpha
+       (recur (element_or_false (alpha_convert exp)))
        false
   def (recur `[lambda [,y] ,e])
     let e_new (recur e)
@@ -101,10 +102,17 @@ def (subst exp x ea force_alpha)
 
   (recur exp)
 
+def (alpha_convert exp) (alpha_convert exp (lambda (str) (+ str "0")))
+def (alpha_convert `[lambda [,x] ,eb] sym_generator)
+  let x_new (sym_generator x)
+  [`[lambda ,[x_new] ,(subst eb x x_new)]]
+def (alpha_convert exp sym_generator) []
+
 def (is_beta_redex [`[lambda [,x] ,eb] ea]) true
 def (is_beta_redex exp) false
 
 ;; Expr Boolean -> (ListOf Expr)
+def (beta_reduce exp) (beta_reduce exp true)
 def (beta_reduce [`[lambda [,x] ,eb] ea] force_alpha)
   let eb_new (subst eb x ea force_alpha)
   if eb_new
@@ -120,8 +128,24 @@ def (element_or_false lst)
 
 def (main)
 {
-  ;;let t (trace `[lambda ,["x"] ,"x"] "AOE")
-  let t (trace [`[lambda ,["x"] ,["x" "x"]] `[lambda ,["x"] ,"x"]] "AOE")
-  ;;let t (trace ["x" "x"] "AOE")
-  (debug_print (write t))
+  def (lam param_lst body) `[lambda ,param_lst ,body]
+
+  let a "a"
+  let b "b"
+  let c "c"
+  let d "d"
+  let z "z"
+
+  let p1 [[(lam [a] a) (lam [b] b)]
+          [(lam [c] c) (lam [d] d)]]
+  let p2 (lam [z]
+            [[(lam [a] a) (lam [b] b)]
+             [(lam [c] c) (lam [d] d)]])
+
+  let t1 (trace p1 "AOE")
+  let t2 (trace p2 "AOE")
+  {
+    (debug_print (write t1))
+    (debug_print (write t2))
+  }
 }

@@ -48,14 +48,18 @@ def (is_slice x) false
 
 ;; Concatenation
 
-def (+ `[_slice ,s1] `[_slice ,s2])
+;; TODO: If dispatch fails then this will produce an error with _slice_concat instead of + (which is undesirable).
+;;       Howerver, this stratification needs to be done otherwise problems arise with the k-ary version of +.
+def (_slice_concat `[_slice ,s1] `[_slice ,s2])
   let n1 = (bless (_slice_len s1))
   let n2 = (bless (_slice_len s2))
-    (bless (slice_concat s1 n1 s2 n2))
+  (bless (slice_concat s1 n1 s2 n2))
+def (_slice_concat ,empty x=`[_slice ,_]) x
+def (_slice_concat x=`[_slice ,_] ,empty) x
+def (_slice_concat ,empty ,empty) empty
 
-def (+ ,empty x) x ;; TODO: this is probably unsafe
-def (+ x=`[_slice ,_] ,empty) x
-
+def (+ x=`[_slice ,_] y) (_slice_concat x y)
+def (+ ,empty y) (_slice_concat empty y)
 
 ;;def (slice_len `[_slice ,s])
 ;;  (bless (_init_from_s64 none (_slice_len s)))

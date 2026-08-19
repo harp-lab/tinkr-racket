@@ -141,6 +141,10 @@ blessed (alloc_attempt x n)
   (seq_2 (assign x alloc_fr) 
          (assign alloc_fr (many_t (plus (manys_t alloc_fr) n))))
 
+
+blessed (set_tag x t) (u64bit_or t (top61 x))
+
+
 ;; Slices
 blessed (tag_as_slice s) (u64bit_or 2 s)
 

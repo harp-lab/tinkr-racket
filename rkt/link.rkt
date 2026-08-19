@@ -216,27 +216,42 @@
 		   (format "extern any ~a;\n" (escape-id-for-C type)))
 		 obj-types))))
   (define vtable-defs
-    (foldl string-append ""
+    (foldr string-append ""
 	   (append
+      ;; Generate vtables
 	    (map (lambda (type)
-		   (format "blessed_t ~a_vtable[] = {\n~a};\n"
-			   (escape-id-for-C type)
-			   (string-join
-			    (map (lambda (method)
-				   (define obj-h
-				     (hash-ref method-obj-impl method hash))
-				   (if (hash-has-key? obj-h type)
-               (format "fn_to_blessed(~a)"
-					       (escape-id-for-C
-						(hash-ref obj-h type)))
-               "fn_to_blessed(fail_locally)"))
-				 all-methods-ord)
-			    ",\n    ")))
-		 all-types)
+            (format "blessed_t ~a_vtable[] = {\n~a};\n"
+              (escape-id-for-C type)
+              (string-join
+                (map (lambda (method)
+                        (define obj-h
+                          (hash-ref method-obj-impl method hash))
+                        (if (hash-has-key? obj-h type)
+                            (format "fn_to_blessed(~a)"
+                              (escape-id-for-C (hash-ref obj-h type)))
+                            "fn_to_blessed(fail_locally)"))
+                     all-methods-ord)
+                ",\n    ")))
+		       all-types)
+      
+      ;; Set each obj type/tag name equal to a corresponding vtable for that object
 	    (map (lambda (type)
-		   (format "any ~a = (any)~a_vtable;\n"
-			   (escape-id-for-C type) (escape-id-for-C type)))
-		 obj-types))))
+              (format "any ~a = (any)~a_vtable;\n"
+                (escape-id-for-C type) (escape-id-for-C type)))
+		       obj-types)
+      
+      ;; Generate a map from obj tag values to obj tag names (for debug purposes)
+      (list
+        "#ifdef DEBUG\n"
+        "#include <unordered_map>\n"
+        "const std::unordered_map<u64, std::string> DEBUG_OBJ_TAG_MAP = {\n")
+      (map (lambda (type)
+              (format "    { (u64)~a, \"~a\" },\n"
+                (escape-id-for-C type) (escape-id-for-C type)))
+		       obj-types)
+      (list
+        "};\n"
+        "#endif\n"))))
   (define init-decls
     (string-append
      (format "extern reg_passing AVXRet entry_point_init(~a,~a);\n"
@@ -607,8 +622,15 @@
   (with-output-to-file
       (build-path init-root "link.cpp")
     (lambda () (display "#include \"link.h\"\n")
-	    (display subword-defs) (display method-defs)
-	    (display vtable-defs) (display init-defs)
+      (displayln "// Subword defs:")
+	    (display subword-defs)
+      (displayln "// Method defs:")
+      (display method-defs)
+      (displayln "// Vtable defs:")
+	    (display vtable-defs)
+      (displayln "// Init defs:")
+      (display init-defs)
+      (displayln "// View defs:")
 	    (display (apply string-append (reverse view-defs))))
     #:exists 'replace))
 
