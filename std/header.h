@@ -143,7 +143,7 @@ typedef AVXRet (reg_passing *blessed_t)
 
     #define DBG(x) ATOMIC_PRINT(x)
     #define DBG_VALUE(x) \
-      x << " (tag: " << DBG_GET_TAG(x) << ", " << DEBUG_TAG_MAP.at(DBG_GET_TAG(x)) << ") " << ((DBG_GET_TAG(x) == 1) ? get_obj_tag_string(x) : " ") << " " \
+      x << " (tag: " << DBG_GET_TAG(x) << ", " << DEBUG_TAG_MAP.at(DBG_GET_TAG(x)) << ") " << ((DBG_GET_TAG(x) == 1) ? get_obj_tag_string(x) : " ") << " "
     // Assuming any is 64 bits
     #define DBG_VALUE_BASE10(x) ((u64)x)
 

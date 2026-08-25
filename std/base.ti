@@ -12,6 +12,7 @@ include "seq.ti"
 include "slice.ti"
 include "bool.ti"
 include "begin.ti"
+include "lib.ti"
 
 
 include "main.ti"

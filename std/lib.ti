@@ -7,6 +7,12 @@ def (map f [] ...) []
 def (map f [xs lsts ...] ...)
   [(f xs ...) (map f lsts ...) ...]
 
+def (filter f []) []
+def (filter f [x rest ...])
+  if (f x)
+     [x (filter f rest) ...]
+     (filter f rest)
+
 def (flatten (? lst is_slice))
   def (f (? lst is_slice))
     (foldl (lambda (x acc) (+ acc (f x))) [] lst)
@@ -21,14 +27,9 @@ def (max x y)
 def (max x y rest ...)
   (max (max x y) rest ...)
 
-def (add x y)
-  x + y
+def (min x) x
+def (min x y)
+  if (< x y) x y
+def (min x y rest ...)
+  (min (min x y) rest ...)
 
-def (add1 x)
-  x + 1
-
-def (main)
-{
-  (debug_print (write (foldl add 0 [1 2 3 4 5])))
-  (debug_print (write (map add1 [1 2 3 4])))
-}
