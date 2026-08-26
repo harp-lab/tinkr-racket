@@ -34,32 +34,37 @@
    exp-cache]
   #:transparent)
 
-(define (store-var-flags-ref st loc)
-  (hash-ref (store-var-flags st) loc))
+(define global-store (store (hash) (hash) (hash)))
 
-(define (store-context-flags-ref st loc)
-  (hash-ref (store-context-flags st) loc))
+(define (store-var-flags-ref loc)
+  (hash-ref (store-var-flags global-store) loc))
 
-(define (store-exp-cache-ref st loc)
-  (hash-ref (store-exp-cache st) loc))
+(define (store-context-flags-ref loc)
+  (hash-ref (store-context-flags global-store) loc))
 
-(define (store-set-var-flags st loc val)
-  (store
-    (hash-set (store-var-flags st) loc val)
-    (store-context-flags st)
-    (store-exp-cache st)))
+(define (store-exp-cache-ref loc)
+  (hash-ref (store-exp-cache global-store) loc))
 
-(define (store-set-context-flags st loc val)
-  (store
-    (store-var-flags st)
-    (hash-set (store-context-flags st) loc val)
-    (store-exp-cache st)))
+(define (store-set-var-flags! loc val)
+  (set! global-store
+    (store
+      (hash-set (store-var-flags global-store) loc val)
+      (store-context-flags global-store)
+      (store-exp-cache global-store))))
 
-(define (store-set-exp-cache st loc val)
-  (store
-    (store-var-flags st)
-    (store-context-flags st)
-    (hash-set (store-exp-cache st) loc val)))
+(define (store-set-context-flags! loc val)
+  (set! global-store
+    (store
+      (store-var-flags global-store)
+      (hash-set (store-context-flags global-store) loc val)
+      (store-exp-cache global-store))))
+
+(define (store-set-exp-cache! loc val)
+  (set! global-store
+    (store
+      (store-var-flags global-store)
+      (store-context-flags global-store)
+      (hash-set (store-exp-cache global-store) loc val))))
 
 
 
@@ -75,73 +80,71 @@
     (set! next-loc (+ next-loc 1))
     loc))
 
-(define global-store (store (hash) (hash) (hash)))
-
 ;; Expr -> Expr
 (define (optimize-prog prog [recur-count 5])
+  (set! global-store (store (hash) (hash) (hash)))
+
   (define (opt-helper prog recur-count)
     (cond
       [(<= recur-count 0) prog]
       [else
         (displayln (remove-extra-data prog))
-        (define prog^ (optimize prog 'value (hash) (lambda (exp st) exp) global-store))
+        (define prog^ (optimize prog 'value (hash)))
 
         (if (equal? prog prog^)
             prog
-           (opt-helper prog^ (- recur-count 1)))]))
+            (opt-helper prog^ (- recur-count 1)))]))
 
   (remove-extra-data (opt-helper (init-extra-data prog) recur-count)))
 
-(define (new-variable x st)
+(define (new-variable x)
   (match-define `(var ,x-sym null ,s ,loc-x) x)
   (define loc-x^ (fresh-loc))
-  (define x^ `(var ,(gensym x-sym) null ,(store-var-flags-ref st loc-x) ,loc-x^))
+  (define x^ `(var ,(gensym x-sym) null ,(store-var-flags-ref loc-x) ,loc-x^))
 
-  (define st^ (store-set-var-flags st loc-x^ (set)))
-  
-  (values x^ st^))
+  (store-set-var-flags! loc-x^ (set))
 
-(define (optimize expr context env kont st)
+  x^)
+
+;; Expr Context Env -> Expr
+;; Mutates the global store as it goes; returns the optimized expression
+;; directly instead of invoking a continuation.
+(define (optimize expr context env)
   (match expr
     [`(const ,c)
       (cond
-        [(equal? context 'effect) (kont '(const void) st)]
+        [(equal? context 'effect) '(const void)]
 
         ;; All values except #f are truthy.
         [(and (equal? context 'test) (not (equal? c #f)))
-          (kont '(const #t) st)]
+          '(const #t)]
 
         ;; We need the value of the constant still
-        [else (kont `(const ,c) st)])]
-    
+        [else `(const ,c)])]
+
     ;; Evalutate e1 for its effect, then evaluate e2 for the current context
     [`(seq ,e1 ,e2)
-      (optimize e1 'effect env
-                (lambda (e1^ st^)
-                  (optimize e2 context env
-                    (lambda (e2^ st^)
-                      (kont (make-seq e1^ e2^) st^))
-                    st^)) st)]
+      (define e1^ (optimize e1 'effect env))
+      (define e2^ (optimize e2 context env))
+      (make-seq e1^ e2^)]
 
     [`(lambda (,x) ,e)
       (match context
-        ['test (kont `(const #t) st)]
-        ['effect (kont `(const void) st)]
+        ['test '(const #t)]
+        ['effect '(const void)]
 
         ;; Just leave the lambda alone (and recur down the body)
         ['value
           ;; Create a new variable x^ for the formal parameter
-          (define-values (x^ e-st) (new-variable x st))
+          (define x^ (new-variable x))
           (define e-env (hash-set env x x^))
 
-          (optimize e 'value e-env
-            (lambda (e^ st^)
-              (kont `(lambda (,x^) ,e^) st^))
-            e-st)]
-        
+          (define e^ (optimize e 'value e-env))
+          `(lambda (,x^) ,e^)]
+
         ;; Lambda is in an application context, so try to beta reduce (i.e. fold) it.
         [`(app ,op ,c ,loc)
-          (fold-expr `(lambda (,x) ,e) context env kont st)])]
+          (fold-expr `(lambda (,x) ,e) context env)])]
 
     [`(call ,ef ,ea)
       ;; Create application context for ef so that the processing of ef can
@@ -151,32 +154,29 @@
       (define op (opnd ea env loc-ea))
       (define ef-context `(app ,op ,context ,loc-ef-context))
 
-      (define ef-store (store-set-context-flags
-                          (store-set-exp-cache st loc-ea 'unvisited)     ;; initialize ea cache
-                                                  loc-ef-context (set))) ;; initalize ef context flags
+      (store-set-exp-cache! loc-ea 'unvisited)          ;; initialize ea cache
+      (store-set-context-flags! loc-ef-context (set))   ;; initalize ef context flags
 
-      (optimize ef ef-context env
-        (lambda (ef^ ef-store^)
-          (define context-flags (store-context-flags-ref ef-store^ loc-ef-context))
-          (cond
-            ;; ef has been inlined (so ignore ea and just return the inlined result)
-            [(set-member? context-flags 'inlined) (kont ef^ ef-store^)]
+      (define ef^ (optimize ef ef-context env))
+      (define context-flags (store-context-flags-ref loc-ef-context))
 
-            ;; ef has not been inlined, so process ea (via visiting op) and then return the call expression
-            [else
-              (visit op 'value
-                    (lambda (ea^ ea-store^) (kont `(call ,ef^ ,ea^) ea-store^))
-                    ef-store^)]))
-        ef-store)]
-    
+      (cond
+        ;; ef has been inlined (so ignore ea and just return the inlined result)
+        [(set-member? context-flags 'inlined) ef^]
+
+        ;; ef has not been inlined, so process ea (via visiting op) and then return the call expression
+        [else
+          (define ea^ (visit op 'value))
+          `(call ,ef^ ,ea^)])]
+
     [`(primref ,x)
       (cond
-        [(equal? context 'test) (kont `(const #t) st)]
-        [(equal? context 'effect) (kont `(const void) st)]
-        [(equal? context 'value) (kont `(primref ,x) st)]
-        
+        [(equal? context 'test) '(const #t)]
+        [(equal? context 'effect) '(const void)]
+        [(equal? context 'value) `(primref ,x)]
+
         ;; Application context, so try to apply the primitive.
-        [else (fold-expr `(primref ,x) context env kont st)])]
+        [else (fold-expr `(primref ,x) context env)])]
 
     [`(ref ,x)
       (match-define `(var ,x-sym null ,x-source-flags ,x-loc) x)
@@ -187,42 +187,38 @@
       (cond
         ;; If in an effect context, then we don't care about the reference
         [(equal? context 'effect)
-          (kont `(const void) st)]
-        
+          '(const void)]
+
         ;; If x^ is not bound to an operand or it is a mutable reference,
         ;; then we can't inline/propogate it.
         [(or (equal? op 'null)
              (set-member? x^-source-flags 'assign))
           ;; Mark it as a ref if it wasn't already.
-          (define x^-var-flags (store-var-flags-ref st x^-loc))
-          (define st^ (store-set-var-flags st x^-loc (set-add x^-var-flags 'ref)))
-          
-          (kont `(ref ,x^) st^)]
-        
+          (store-set-var-flags! x^-loc (set-add (store-var-flags-ref x^-loc) 'ref))
+
+          `(ref ,x^)]
+
         ;; Otherwise, we can try to copy/propogate the value of x^ into the reference site.
         [else
           ;; Get the operand expression and then try to copy it to the reference site.
-          (visit op 'value
-                 (lambda (op-e st^)
-                   (copy x^ (result op-e) context kont st^)) st)])]))
+          (define op-e (visit op 'value))
+          (copy x^ (result op-e) context)])]))
 
 ;; Residualize an operand/argument expression (if it has already been visited,
 ;; it will use the cached version)
-(define (visit op context kont st)
+(define (visit op context)
   (match-define (opnd e env e-loc) op)
-  (define cached (store-exp-cache-ref st e-loc))
+  (define cached (store-exp-cache-ref e-loc))
 
   (cond
     ;; We need to process the operand expression for the first time (cache is empty).
     [(equal? cached 'unvisited)
-      (define new-kont
-        (lambda (e^ st^)
-          (kont e^ (store-set-exp-cache st^ e-loc e^))))
+      (define e^ (optimize e context env))
+      (store-set-exp-cache! e-loc e^)
+      e^]
 
-      (optimize e context env new-kont st)]
-    
     ;; Otherwise, we have already processed the operand, so just use the cached version.
-    [else (kont cached st)]))
+    [else cached]))
 
 ;; Helper to sequence two expressions (ensuring that the
 ;; last expression in the sequence is not a sequence itself).
@@ -240,9 +236,9 @@
 
 ;; Handles copy propogation and inlining at a variable reference site.
 ;; x-var is the variable reference site. e is the expression that x-var refers to.
-(define (copy x-var e context kont st)
+(define (copy x-var e context)
   (match-define `(var ,x ,op ,s ,loc-x) x-var)
-  
+
   (define e-tag (car e))
 
   (define context-type
@@ -261,93 +257,89 @@
     ;; Propogate constants
     [(equal? e-tag 'const)
       (match-define `(const ,c) e)
-      (optimize `(const ,c) context (hash) kont st)]
-    
+      (optimize `(const ,c) context (hash))]
+
     ;; Propogate immutable variables
     [immutable-var-ref?
       (match-define `(ref ,y-var) e)
       (match-define `(var ,y ,op-y ,s-y ,loc-y) y-var)
 
-      (kont `(ref ,y-var) st)]
-    
+      `(ref ,y-var)]
+
     ;; Inline lambdas and primitive references into application contexts and try to beta reduce them?
     [(and (equal? context-type 'app) (or (equal? e-tag 'lambda) (equal? e-tag 'primref)))
       (match-define `(app ,op ,c ,loc) context)
-      (fold-expr e context (hash) kont st)]
-    
+      (fold-expr e context (hash))]
+
     ;; A primref is basically a constant. So just propogate it.
     [(and (equal? context-type 'value) (equal? e-tag 'primref))
-      (kont e st)]
-    
+      e]
+
     ;; Lambdas, assignments, and primitive references are truthy (so the variable ref
     ;; to them can be replaced with #t)
     [(and (equal? context-type 'test)
           (or (equal? e-tag 'lambda) (equal? e-tag 'assign) (equal? e-tag 'primref)))
-      (kont `(const #t) st)]
-    
+      '(const #t)]
+
     ;; Otherwise, just leave the reference alone (mark it as a reference if needed).
     [else
-      (define st^ (store-set-var-flags st loc-x (set-add (store-var-flags-ref st loc-x) 'ref)))
-      (kont `(ref x-var) st^)]))
+      (store-set-var-flags! loc-x (set-add (store-var-flags-ref loc-x) 'ref))
+      `(ref ,x-var)]))
 
 ;; Tries to reduce an application of a lambda or primitive.
-(define (fold-expr expr context env kont st)
+(define (fold-expr expr context env)
   (match expr
     [`(primref ,p)
       (match-define `(app ,op ,app-context ,context-loc) context)
-      (visit op 'value
-            (lambda (op-e st)
-              (match (result op-e)
-                ;; Arg is a constant, so just apply the primitive.
-                [`(const ,c)
-                 (define p-fun (hash-ref primitives p))
-                 (define new-c (p-fun c))
-                 (define st^ (store-set-context-flags st context-loc (set-add (store-context-flags-ref st context-loc) 'inlined)))
-                 (kont `(const ,new-c) st^)]
-                
-                ;; Otherwise, just leave the primitive application alone.
-                [_
-                  (kont `(primref ,p) st)]))
-            st)]
+      (define op-e (visit op 'value))
+      (match (result op-e)
+        ;; Arg is a constant, so just apply the primitive.
+        [`(const ,c)
+         (define p-fun (hash-ref primitives p))
+         (define new-c (p-fun c))
+         (store-set-context-flags! context-loc (set-add (store-context-flags-ref context-loc) 'inlined))
+         `(const ,new-c)]
+
+        ;; Otherwise, just leave the primitive application alone.
+        [_
+          `(primref ,p)])]
     [`(lambda (,x) ,e)
-      (fold-lambda expr context env kont st)]))
+      (fold-lambda expr context env)]))
 
 ;; Try beta reducing the lambda
-(define (fold-lambda expr context env kont st)
+(define (fold-lambda expr context env)
   (match-define `(app ,op ,app-context ,context-loc) context)
   (match-define `(lambda (,x-var) ,e) expr)
 
   (match-define `(var ,x null ,s ,loc-x) x-var)
   (define loc-x^ (fresh-loc))
-  (define x^-var `(var ,(gensym x) ,op ,(store-var-flags-ref st loc-x) ,loc-x^))
+  (define x^-var `(var ,(gensym x) ,op ,(store-var-flags-ref loc-x) ,loc-x^))
 
   (define e-env (hash-set env x-var x^-var))
-  (define e-st (store-set-var-flags st loc-x^ (set)))
-  (define e-kont
-    (lambda (e^ st^)
-      (define x^-flags (store-var-flags-ref st^ loc-x^))
-      (define x^-is-ref (set-member? x^-flags 'ref))
-      (define x^-is-assign (set-member? x^-flags 'assign))
+  (store-set-var-flags! loc-x^ (set))
 
-      (define k2
-        (lambda (e1^ st3)
-          (define st3^ (store-set-context-flags st3 context-loc (set-add (store-context-flags-ref st3 context-loc) 'inlined)))
-          (kont `(seq ,e1^ ,e^) st3^)))
+  (define e^ (optimize e app-context e-env))
 
-      (define k3
-        (lambda (e1^ st3)
-          (define st3^ (store-set-context-flags st3 context-loc (set-add (store-context-flags-ref st3 context-loc) 'inlined)))
-          (kont `(call (lambda (,x^-var) ,e^) ,e1^) st3^)))
+  (define x^-flags (store-var-flags-ref loc-x^))
+  (define x^-is-ref (set-member? x^-flags 'ref))
+  (define x^-is-assign (set-member? x^-flags 'assign))
 
-      (cond
-        [(and (not x^-is-ref) (not x^-is-assign))
-          (visit op 'effect k2 st^)]
-        [(and (not x^-is-ref) x^-is-assign)
-          (visit op 'effect k3 st^)]
-        [else
-          (visit op 'value k3 st^)])))
+  (define (mark-inlined!)
+    (store-set-context-flags! context-loc (set-add (store-context-flags-ref context-loc) 'inlined)))
 
-  (optimize e app-context e-env e-kont e-st))
+  (cond
+    [(and (not x^-is-ref) (not x^-is-assign))
+      (define e1^ (visit op 'effect))
+      (mark-inlined!)
+      `(seq ,e1^ ,e^)]
+    [(and (not x^-is-ref) x^-is-assign)
+      (define e1^ (visit op 'effect))
+      (mark-inlined!)
+      `(call (lambda (,x^-var) ,e^) ,e1^)]
+    [else
+      (define e1^ (visit op 'value))
+      (mark-inlined!)
+      `(call (lambda (,x^-var) ,e^) ,e1^)]))
 
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
 (define (init-extra-data expr [env (hash)])
@@ -369,14 +361,14 @@
       (define x-var-loc (fresh-loc))
       (define x-var `(var ,x null ,(set) ,x-var-loc))
       (define e-env (hash-set env x x-var))
-      
-      (set! global-store (store-set-var-flags global-store x-var-loc (set)))
+
+      (store-set-var-flags! x-var-loc (set))
 
       `(lambda (,x-var) ,(init-extra-data e e-env))]
 
     [`(,e1 ,e2)
      `(call ,(recur e1) ,(recur e2))]
-    
+
     [(? symbol? x) #:when (set-member? (set 'add1 'zero?) x)
      `(primref ,x)]
 
