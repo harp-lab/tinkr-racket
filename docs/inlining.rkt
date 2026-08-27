@@ -25,6 +25,15 @@
         (add1 (x y)))))
     (lambda (z) z)))
 
+(define p5
+  `(((lambda (x)
+      (lambda (y)
+        (if (zero? y)
+            (x y)
+            (add1 (x y)))))
+    (lambda (z) z))
+    1))
+
 (define primitives (hash 'add1 add1
                          'zero? zero?))
 
@@ -66,6 +75,8 @@
       (store-context-flags global-store)
       (hash-set (store-exp-cache global-store) loc val))))
 
+(define (mark-inlined! context-loc)
+  (store-set-context-flags! context-loc (set-add (store-context-flags-ref context-loc) 'inlined)))
 
 
 (struct opnd
@@ -127,6 +138,42 @@
       (define e1^ (optimize e1 'effect env))
       (define e2^ (optimize e2 context env))
       (make-seq e1^ e2^)]
+
+    [`(if ,g ,e1 ,e2)
+      (define g^ (optimize g 'test env))
+      (define g-res (result g^))
+
+      ;; We don't want to propogate an application context down the if branches
+      (define e-context
+        (match context
+          [`(app ,op ,c ,loc) 'value]
+          [_ context]))
+
+      (cond
+        ;; Always go down the true branch
+        [(equal? g-res '(const #t))
+         (define e1^ (optimize e1 e-context env))
+         (make-seq g^ e1^)]
+
+        ;; Always go down the false branch
+        [(equal? g-res '(const #f))
+         (define e2^ (optimize e2 e-context env))
+         (make-seq g^ e2^)]
+        
+        ;; Could be either branch
+        [else
+          (define e1^ (optimize e1 e-context env))
+          (define e2^ (optimize e2 e-context env))
+
+          (match* (e1^ e2^)
+            ;; Both branches evaluate to the same constant, so just return the constant,
+            ;; letting the guard expression be evaluated for just its effect.
+            [(`(const ,c1) `(const ,c2)) #:when (equal? c1 c2)
+              (make-seq g^ e1^)]
+            
+            ;; Otherwise, just return the if
+            [(_ _)
+              `(if ,g^ ,e1^ ,e2^)])])]
 
     [`(lambda (,x) ,e)
       (match context
@@ -297,7 +344,7 @@
         [`(const ,c)
          (define p-fun (hash-ref primitives p))
          (define new-c (p-fun c))
-         (store-set-context-flags! context-loc (set-add (store-context-flags-ref context-loc) 'inlined))
+         (mark-inlined! context-loc)
          `(const ,new-c)]
 
         ;; Otherwise, just leave the primitive application alone.
@@ -324,21 +371,18 @@
   (define x^-is-ref (set-member? x^-flags 'ref))
   (define x^-is-assign (set-member? x^-flags 'assign))
 
-  (define (mark-inlined!)
-    (store-set-context-flags! context-loc (set-add (store-context-flags-ref context-loc) 'inlined)))
-
   (cond
     [(and (not x^-is-ref) (not x^-is-assign))
       (define e1^ (visit op 'effect))
-      (mark-inlined!)
+      (mark-inlined! context-loc)
       `(seq ,e1^ ,e^)]
     [(and (not x^-is-ref) x^-is-assign)
       (define e1^ (visit op 'effect))
-      (mark-inlined!)
+      (mark-inlined! context-loc)
       `(call (lambda (,x^-var) ,e^) ,e1^)]
     [else
       (define e1^ (visit op 'value))
-      (mark-inlined!)
+      (mark-inlined! context-loc)
       `(call (lambda (,x^-var) ,e^) ,e1^)]))
 
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
