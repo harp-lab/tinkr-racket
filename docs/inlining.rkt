@@ -4,10 +4,11 @@
   `((lambda (x) x) 5))
 
 (define p2
-  `(let ([x 3])
-    (if ((primref =) (ref x) (const 0))
-        (ref x)
-        (const 5))))
+  `(lambda (a)
+    (let x 3
+      (if (zero? a)
+          x
+          5))))
 
 (define p3
   `((lambda (x)
@@ -34,8 +35,30 @@
     (lambda (z) z))
     1))
 
+(define p6
+ '(let f (lambda (g) (g g))
+    (let z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))
+      (let y (lambda (m) (m 4))
+        (let x (y z)
+          (+ 7 (f x)))))))
+
+(define p7
+  `(let f (lambda (a b)
+            (a b))
+      (f (lambda (x) x) 1)))
+
+(define p8
+ '(lambda (h)
+    (let f (lambda (g) (g g))
+      (let z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))
+        (let y (lambda (m) (m 4))
+          (let x (h (y z))
+            (+ 7 (f x))))))))
+
 (define primitives (hash 'add1 add1
-                         'zero? zero?))
+                         'zero? zero?
+                         '+ +
+                         '< <))
 
 (struct store
   [var-flags
@@ -80,10 +103,21 @@
 
 
 (struct opnd
-  [exp
+  [exps
    env
-   loc-exp]
+   cache-loc]
   #:transparent)
+
+(define (construct-operand e env)
+  (define cache-loc (fresh-loc))
+
+  ;; initialize cache
+  (store-set-exp-cache! cache-loc 'unvisited)
+
+  (opnd e env cache-loc))
+
+(define (construct-operands exps env)
+  (map (lambda (e) (construct-operand e env)) exps))
 
 (define next-loc 0)
 (define (fresh-loc)
@@ -102,20 +136,83 @@
         (displayln (remove-extra-data prog))
         (define prog^ (optimize prog 'value (hash)))
 
-        (if (equal? prog prog^)
+        (if (alpha-equiv? prog prog^)
             prog
             (opt-helper prog^ (- recur-count 1)))]))
 
   (remove-extra-data (opt-helper (init-extra-data prog) recur-count)))
 
-(define (new-variable x)
-  (match-define `(var ,x-sym null ,s ,loc-x) x)
+(define (make-gensym sym)
+  (define count 0)
+  (lambda ()
+    (set! count (+ count 1))
+    (string->symbol
+      (string-append (symbol->string sym)
+                     (number->string count)))))
+
+(define (alphatize p [env (hash)] [gen-sym (make-gensym 'x)])
+  (define (recur p env)
+    (alphatize p env gen-sym))
+  
+  (match p
+    [`(lambda (,x) ,e)
+      (define x^ (gen-sym))
+      (define e-env (hash-set env x x^))
+      `(lambda (,x^) ,(recur e e-env))]
+
+    [`(let ,x ,e ,be)
+      (recur `((lambda (,x) ,be) ,e) env)]
+
+    [`(if ,g ,e1 ,e2)
+     `(if ,(recur g env) ,(recur e1 env) ,(recur e2 env))]
+
+    [`(seq ,e1 ,e2)
+     `(seq ,(recur e1 env) ,(recur e2 env))]
+
+    [`(,e1 ,e2)
+     `(,(recur e1 env) ,(recur e2 env))]
+
+    [(? symbol? p) #:when (set-member? (hash-keys primitives) p)
+     p]
+
+    [(? symbol? x)
+     (hash-ref env x)]
+
+    [_
+     p]))
+
+(define (alpha-equiv? p0 p1)
+  (equal? (alphatize (remove-extra-data p0)) (alphatize (remove-extra-data p1))))
+
+(define (copy-variable x)
+  (match-define `(var ,x-sym ,op ,s ,loc-x) x)
   (define loc-x^ (fresh-loc))
-  (define x^ `(var ,(gensym x-sym) null ,(store-var-flags-ref loc-x) ,loc-x^))
+  (define x^ `(var ,(gensym x-sym) ,op ,(store-var-flags-ref loc-x) ,loc-x^))
 
   (store-set-var-flags! loc-x^ (set))
 
   x^)
+
+;; (ListOf Varable) -> (ListOf Variable)
+(define (copy-variables xs)
+  (map copy-variable xs))
+
+(define (extend-env env xs xs^)
+  (for/fold ([env env])
+            ([x xs]
+             [x^ xs^])
+    (hash-set env x x^)))
+
+(define (new-variable x-sym)
+  (define x-loc (fresh-loc))
+  (define x `(var ,x-sym null ,(set) ,x-loc))
+  (store-set-var-flags! x-loc (set))
+
+  x)
+
+(define (variable-set-op x op)
+  (match-define `(var ,x-sym ,_ ,s ,loc-x) x)
+  `(var ,x-sym ,op ,s ,loc-x))
 
 ;; Expr Context Env -> Expr
 ;; Mutates the global store as it goes; returns the optimized expression
@@ -175,46 +272,45 @@
             [(_ _)
               `(if ,g^ ,e1^ ,e2^)])])]
 
-    [`(lambda (,x) ,e)
+    [`(lambda (,params ...) ,eb)
       (match context
         ['test '(const #t)]
         ['effect '(const void)]
 
         ;; Just leave the lambda alone (and recur down the body)
         ['value
-          ;; Create a new variable x^ for the formal parameter
-          (define x^ (new-variable x))
-          (define e-env (hash-set env x x^))
+          ;; Create a new variables for the formal parameters.
+          (define params^ (copy-variables params))
+          (define eb-env (extend-env env params params^))
 
-          (define e^ (optimize e 'value e-env))
-          `(lambda (,x^) ,e^)]
+          (define eb^ (optimize eb 'value eb-env))
+          `(lambda (,@params^) ,eb^)]
 
         ;; Lambda is in an application context, so try to beta reduce (i.e. fold) it.
-        [`(app ,op ,c ,loc)
-          (fold-expr `(lambda (,x) ,e) context env)])]
+        [`(app ,ops ,c ,loc)
+          (fold-expr expr context env)])]
 
-    [`(call ,ef ,ea)
+    [`(call ,ef ,args ...)
       ;; Create application context for ef so that the processing of ef can
       ;; perform inlining if possible.
-      (define loc-ea (fresh-loc))
-      (define loc-ef-context (fresh-loc))
-      (define op (opnd ea env loc-ea))
-      (define ef-context `(app ,op ,context ,loc-ef-context))
+      (define ops (construct-operands args env))
 
-      (store-set-exp-cache! loc-ea 'unvisited)          ;; initialize ea cache
-      (store-set-context-flags! loc-ef-context (set))   ;; initalize ef context flags
+      (define loc-ef-context (fresh-loc))
+      (define ef-context `(app ,ops ,context ,loc-ef-context))
+
+      (store-set-context-flags! loc-ef-context (set)) ;; initalize ef context flags
 
       (define ef^ (optimize ef ef-context env))
       (define context-flags (store-context-flags-ref loc-ef-context))
 
       (cond
-        ;; ef has been inlined (so ignore ea and just return the inlined result)
+        ;; ef has been inlined (so ignore the operands and just return the inlined result)
         [(set-member? context-flags 'inlined) ef^]
 
-        ;; ef has not been inlined, so process ea (via visiting op) and then return the call expression
+        ;; ef has not been inlined, so process the operands and then return the call expression
         [else
-          (define ea^ (visit op 'value))
-          `(call ,ef^ ,ea^)])]
+          (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+          `(call ,ef^ ,@op-es)])]
 
     [`(primref ,x)
       (cond
@@ -226,7 +322,7 @@
         [else (fold-expr `(primref ,x) context env)])]
 
     [`(ref ,x)
-      (match-define `(var ,x-sym null ,x-source-flags ,x-loc) x)
+      (match-define `(var ,x-sym ,x-op ,x-source-flags ,x-loc) x)
 
       (define x^ (hash-ref env x))
       (match-define `(var ,x^-sym ,op ,x^-source-flags ,x^-loc) x^)
@@ -248,12 +344,12 @@
         ;; Otherwise, we can try to copy/propogate the value of x^ into the reference site.
         [else
           ;; Get the operand expression and then try to copy it to the reference site.
-          (define op-e (visit op 'value))
+          (define op-e (visit-op op 'value))
           (copy x^ (result op-e) context)])]))
 
 ;; Residualize an operand/argument expression (if it has already been visited,
 ;; it will use the cached version)
-(define (visit op context)
+(define (visit-op op context)
   (match-define (opnd e env e-loc) op)
   (define cached (store-exp-cache-ref e-loc))
 
@@ -267,13 +363,19 @@
     ;; Otherwise, we have already processed the operand, so just use the cached version.
     [else cached]))
 
-;; Helper to sequence two expressions (ensuring that the
+;; Helper to sequence expressions (ensuring that the
 ;; last expression in the sequence is not a sequence itself).
-(define (make-seq e1 e2)
-  (match* (e1 e2)
-    [('(const void) _) e2]
-    [(_ `(seq ,e3 ,e4)) `(seq (seq ,e1 ,e3) ,e4)]
-    [(_ _) `(seq ,e1 ,e2)]))
+(define (make-seq e1 e2 . es)
+  (define (make-seq-pair e1 e2)
+    (match* (e1 e2)
+      [('(const void) _) e2]
+      [(_ `(seq ,e3 ,e4)) `(seq (seq ,e1 ,e3) ,e4)]
+      [(_ _) `(seq ,e1 ,e2)]))
+
+  ;; Note: for more than two expression, void constants may not be removed here.
+  (if (null? es)
+      (make-seq-pair e1 e2)
+      (apply make-seq (make-seq-pair e1 e2) es)))
 
 ;; Helper to ignore sequence expressions and just return the last expression in the sequence.
 (define (result e)
@@ -337,53 +439,62 @@
 (define (fold-expr expr context env)
   (match expr
     [`(primref ,p)
-      (match-define `(app ,op ,app-context ,context-loc) context)
-      (define op-e (visit op 'value))
-      (match (result op-e)
-        ;; Arg is a constant, so just apply the primitive.
-        [`(const ,c)
+      (match-define `(app ,ops ,app-context ,context-loc) context)
+      (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+      (match (map result op-es)
+        ;; All the args are constant, so just apply the primitive.
+        [(list `(const ,cs) ...)
          (define p-fun (hash-ref primitives p))
-         (define new-c (p-fun c))
+         (define new-c (apply p-fun cs)) ;; Note: Should probably check for arity errors here
          (mark-inlined! context-loc)
          `(const ,new-c)]
 
         ;; Otherwise, just leave the primitive application alone.
         [_
           `(primref ,p)])]
-    [`(lambda (,x) ,e)
+    [`(lambda (,params ...) ,eb)
       (fold-lambda expr context env)]))
 
 ;; Try beta reducing the lambda
 (define (fold-lambda expr context env)
-  (match-define `(app ,op ,app-context ,context-loc) context)
-  (match-define `(lambda (,x-var) ,e) expr)
+  (match-define `(app ,ops ,app-context ,context-loc) context)
+  (match-define `(lambda (,params ...) ,eb) expr)
 
-  (match-define `(var ,x null ,s ,loc-x) x-var)
-  (define loc-x^ (fresh-loc))
-  (define x^-var `(var ,(gensym x) ,op ,(store-var-flags-ref loc-x) ,loc-x^))
+  (define params^ (copy-variables params))
+  (define params^^ (map (lambda (p^ op) (variable-set-op p^ op)) params^ ops))
+  (define eb-env (extend-env env params params^^))
 
-  (define e-env (hash-set env x-var x^-var))
-  (store-set-var-flags! loc-x^ (set))
+  ;; This may propogate operands into the body
+  (define eb^ (optimize eb app-context eb-env))
 
-  (define e^ (optimize e app-context e-env))
+  (define can-reduce #t)
+  (define op-es
+    (for/list ([p params^^])
+      (match-define `(var ,p-sym ,op ,s ,loc-p) p)
 
-  (define x^-flags (store-var-flags-ref loc-x^))
-  (define x^-is-ref (set-member? x^-flags 'ref))
-  (define x^-is-assign (set-member? x^-flags 'assign))
+      (define p-flags (store-var-flags-ref loc-p))
+      (define p-is-ref (set-member? p-flags 'ref))
+      (define p-is-assign (set-member? p-flags 'assign))
 
-  (cond
-    [(and (not x^-is-ref) (not x^-is-assign))
-      (define e1^ (visit op 'effect))
-      (mark-inlined! context-loc)
-      `(seq ,e1^ ,e^)]
-    [(and (not x^-is-ref) x^-is-assign)
-      (define e1^ (visit op 'effect))
-      (mark-inlined! context-loc)
-      `(call (lambda (,x^-var) ,e^) ,e1^)]
-    [else
-      (define e1^ (visit op 'value))
-      (mark-inlined! context-loc)
-      `(call (lambda (,x^-var) ,e^) ,e1^)]))
+      (cond
+        ;; There are no more references to the parameter. So, this
+        ;; operand does not prevent us from beta reducing the lambda.
+        [(and (not p-is-ref) (not p-is-assign))
+          (visit-op op 'effect)]
+
+        ;; There are references or assignments to the parameter still,
+        ;; so we cannot beta reduce.
+        [(and (not p-is-ref) p-is-assign)
+          (set! can-reduce #f)
+          (visit-op op 'effect)]
+        [else
+          (set! can-reduce #f)
+          (visit-op op 'value)])))
+  
+  (mark-inlined! context-loc)
+  (if can-reduce
+      (apply make-seq (append op-es (list eb^)))
+      `(call (lambda (,@params^^) ,eb^) ,@op-es)))
 
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
 (define (init-extra-data expr [env (hash)])
@@ -401,19 +512,24 @@
     [`(if ,g ,e1 ,e2)
      `(if ,(recur g) ,(recur e1) ,(recur e2))]
 
-    [`(lambda (,x) ,e)
-      (define x-var-loc (fresh-loc))
-      (define x-var `(var ,x null ,(set) ,x-var-loc))
-      (define e-env (hash-set env x x-var))
+    [`(lambda (,params ...) ,eb)
+      (define-values (eb-env new-params)
+        (for/foldr ([eb-env env]
+                    [new-params (list)])
+                   ([param params])
+          (define new-param (new-variable param))
+          (values (hash-set eb-env param new-param)
+                  (cons new-param new-params))))
 
-      (store-set-var-flags! x-var-loc (set))
+      `(lambda (,@new-params) ,(init-extra-data eb eb-env))]
 
-      `(lambda (,x-var) ,(init-extra-data e e-env))]
+    [`(let ,x ,e ,be)
+      (recur `((lambda (,x) ,be) ,e))]
 
-    [`(,e1 ,e2)
-     `(call ,(recur e1) ,(recur e2))]
+    [`(,e1 ,args ...)
+     `(call ,(recur e1) ,@(map recur args))]
 
-    [(? symbol? x) #:when (set-member? (set 'add1 'zero?) x)
+    [(? symbol? x) #:when (set-member? (hash-keys primitives) x)
      `(primref ,x)]
 
     [(? symbol? x)
@@ -422,6 +538,8 @@
 ;; Remove extra data from the AST.
 (define (remove-extra-data expr)
   (match expr
+    [`(var ,x ,op ,s ,loc-x) x]
+
     [`(const ,c) c]
 
     [`(seq ,e1 ,e2)
@@ -429,17 +547,18 @@
 
     [`(if ,g ,e1 ,e2)
      `(if ,(remove-extra-data g) ,(remove-extra-data e1) ,(remove-extra-data e2))]
+    
+    [`(call (lambda (,x) ,eb) ,e)
+     `(let ,(remove-extra-data x) ,(remove-extra-data e) ,(remove-extra-data eb))]
 
-    [`(lambda (,x-var) ,e)
-      (match-define `(var ,x ,_ ,s ,loc-x) x-var)
-      `(lambda (,x) ,(remove-extra-data e))]
+    [`(lambda (,params ...) ,eb)
+      `(lambda (,@(map remove-extra-data params)) ,(remove-extra-data eb))]
 
-    [`(call ,e1 ,e2)
-     `(,(remove-extra-data e1) ,(remove-extra-data e2))]
+    [`(call ,ef ,args ...)
+     `(,(remove-extra-data ef) ,@(map (lambda (arg) (remove-extra-data arg)) args))]
 
     [`(primref ,p)
      p]
 
-    [`(ref ,x-var)
-     (match-define `(var ,x ,op ,s ,loc-x) x-var)
-     x]))
+    [`(ref ,x)
+     (remove-extra-data x)]))
