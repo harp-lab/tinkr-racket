@@ -55,80 +55,41 @@
           (let x (h (y z))
             (+ 7 (f x))))))))
 
+(define p9
+  `((lambda (x) (x x)) (lambda (x) (x x))))
+
+;; A Context is one of 'effect, 'test, 'value, or an AppContext
+
+(struct opnd
+  [exp     ;; Expr
+   env     ;; (HashOf Var Var)
+   cache]  ;; (BoxOf Expr)
+  #:transparent)
+
+(struct var
+  [name           ;; Symbol
+   op             ;; Opnd
+   flags          ;; (MutableSetOf VarFlag)
+   source-flags]  ;; (SetOf VarFlag)
+  #:transparent)
+;; Where VarFlag can be one of 'ref or 'assign
+
+(struct app-context
+  [ops            ;; (ListOf Opnd)
+   outer-context  ;; Context
+   inlined?]      ;; (BoxOf Bool)
+  #:transparent)
+
 (define primitives (hash 'add1 add1
                          'zero? zero?
                          '+ +
                          '< <))
 
-(struct store
-  [var-flags
-   context-flags
-   exp-cache]
-  #:transparent)
-
-(define global-store (store (hash) (hash) (hash)))
-
-(define (store-var-flags-ref loc)
-  (hash-ref (store-var-flags global-store) loc))
-
-(define (store-context-flags-ref loc)
-  (hash-ref (store-context-flags global-store) loc))
-
-(define (store-exp-cache-ref loc)
-  (hash-ref (store-exp-cache global-store) loc))
-
-(define (store-set-var-flags! loc val)
-  (set! global-store
-    (store
-      (hash-set (store-var-flags global-store) loc val)
-      (store-context-flags global-store)
-      (store-exp-cache global-store))))
-
-(define (store-set-context-flags! loc val)
-  (set! global-store
-    (store
-      (store-var-flags global-store)
-      (hash-set (store-context-flags global-store) loc val)
-      (store-exp-cache global-store))))
-
-(define (store-set-exp-cache! loc val)
-  (set! global-store
-    (store
-      (store-var-flags global-store)
-      (store-context-flags global-store)
-      (hash-set (store-exp-cache global-store) loc val))))
-
-(define (mark-inlined! context-loc)
-  (store-set-context-flags! context-loc (set-add (store-context-flags-ref context-loc) 'inlined)))
-
-
-(struct opnd
-  [exps
-   env
-   cache-loc]
-  #:transparent)
-
-(define (construct-operand e env)
-  (define cache-loc (fresh-loc))
-
-  ;; initialize cache
-  (store-set-exp-cache! cache-loc 'unvisited)
-
-  (opnd e env cache-loc))
-
 (define (construct-operands exps env)
-  (map (lambda (e) (construct-operand e env)) exps))
-
-(define next-loc 0)
-(define (fresh-loc)
-  (let ([loc next-loc])
-    (set! next-loc (+ next-loc 1))
-    loc))
+  (map (lambda (e) (opnd e env (box #f))) exps))
 
 ;; Expr -> Expr
 (define (optimize-prog prog [recur-count 5])
-  (set! global-store (store (hash) (hash) (hash)))
-
   (define (opt-helper prog recur-count)
     (cond
       [(<= recur-count 0) prog]
@@ -185,12 +146,8 @@
   (equal? (alphatize (remove-extra-data p0)) (alphatize (remove-extra-data p1))))
 
 (define (copy-variable x)
-  (match-define `(var ,x-sym ,op ,s ,loc-x) x)
-  (define loc-x^ (fresh-loc))
-  (define x^ `(var ,(gensym x-sym) ,op ,(store-var-flags-ref loc-x) ,loc-x^))
-
-  (store-set-var-flags! loc-x^ (set))
-
+  (match-define (var x-sym op flags source-flags) x)
+  (define x^ (var (gensym x-sym) op (mutable-set) flags))
   x^)
 
 ;; (ListOf Varable) -> (ListOf Variable)
@@ -204,15 +161,11 @@
     (hash-set env x x^)))
 
 (define (new-variable x-sym)
-  (define x-loc (fresh-loc))
-  (define x `(var ,x-sym null ,(set) ,x-loc))
-  (store-set-var-flags! x-loc (set))
-
-  x)
+  (var x-sym '() (mutable-set) (set)))
 
 (define (variable-set-op x op)
-  (match-define `(var ,x-sym ,_ ,s ,loc-x) x)
-  `(var ,x-sym ,op ,s ,loc-x))
+  (match-define (var x-sym _ flags source-flags) x)
+  (var x-sym op flags source-flags))
 
 ;; Expr Context Env -> Expr
 ;; Mutates the global store as it goes; returns the optimized expression
@@ -243,7 +196,7 @@
       ;; We don't want to propogate an application context down the if branches
       (define e-context
         (match context
-          [`(app ,op ,c ,loc) 'value]
+          [(app-context ops c inlined?) 'value]
           [_ context]))
 
       (cond
@@ -287,25 +240,21 @@
           `(lambda (,@params^) ,eb^)]
 
         ;; Lambda is in an application context, so try to beta reduce (i.e. fold) it.
-        [`(app ,ops ,c ,loc)
+        [(app-context ops c inlined?)
           (fold-expr expr context env)])]
 
     [`(call ,ef ,args ...)
-      ;; Create application context for ef so that the processing of ef can
+      ;; Create an application context for ef so that the processing of ef can
       ;; perform inlining if possible.
       (define ops (construct-operands args env))
-
-      (define loc-ef-context (fresh-loc))
-      (define ef-context `(app ,ops ,context ,loc-ef-context))
-
-      (store-set-context-flags! loc-ef-context (set)) ;; initalize ef context flags
+      (define ef-context (app-context ops context (box #f)))
 
       (define ef^ (optimize ef ef-context env))
-      (define context-flags (store-context-flags-ref loc-ef-context))
+      (define inlined? (unbox (app-context-inlined? ef-context)))
 
       (cond
-        ;; ef has been inlined (so ignore the operands and just return the inlined result)
-        [(set-member? context-flags 'inlined) ef^]
+        ;; Ignore the operands and just return the inlined result
+        [inlined? ef^]
 
         ;; ef has not been inlined, so process the operands and then return the call expression
         [else
@@ -322,10 +271,10 @@
         [else (fold-expr `(primref ,x) context env)])]
 
     [`(ref ,x)
-      (match-define `(var ,x-sym ,x-op ,x-source-flags ,x-loc) x)
+      (match-define (var x-sym x-op x-flags x-source-flags) x)
 
       (define x^ (hash-ref env x))
-      (match-define `(var ,x^-sym ,op ,x^-source-flags ,x^-loc) x^)
+      (match-define (var x^-sym op x^-flags x^-source-flags) x^)
 
       (cond
         ;; If in an effect context, then we don't care about the reference
@@ -334,10 +283,10 @@
 
         ;; If x^ is not bound to an operand or it is a mutable reference,
         ;; then we can't inline/propogate it.
-        [(or (equal? op 'null)
+        [(or (null? op)
              (set-member? x^-source-flags 'assign))
           ;; Mark it as a ref if it wasn't already.
-          (store-set-var-flags! x^-loc (set-add (store-var-flags-ref x^-loc) 'ref))
+          (set-add! x^-flags 'ref)
 
           `(ref ,x^)]
 
@@ -350,25 +299,25 @@
 ;; Residualize an operand/argument expression (if it has already been visited,
 ;; it will use the cached version)
 (define (visit-op op context)
-  (match-define (opnd e env e-loc) op)
-  (define cached (store-exp-cache-ref e-loc))
+  (match-define (opnd e env cache) op)
+  (define c (unbox cache))
 
   (cond
-    ;; We need to process the operand expression for the first time (cache is empty).
-    [(equal? cached 'unvisited)
-      (define e^ (optimize e context env))
-      (store-set-exp-cache! e-loc e^)
-      e^]
+    ;; We have already processed the operand, so just use the cached version.
+    [c c]
 
-    ;; Otherwise, we have already processed the operand, so just use the cached version.
-    [else cached]))
+    ;; We need to process the operand expression for the first time (cache is #f).
+    [else
+      (define e^ (optimize e context env))
+      (set-box! cache e^)
+      e^]))
 
 ;; Helper to sequence expressions (ensuring that the
 ;; last expression in the sequence is not a sequence itself).
 (define (make-seq e1 e2 . es)
   (define (make-seq-pair e1 e2)
     (match* (e1 e2)
-      [('(const void) _) e2]
+      [((? no-effect? e1) _) e2]
       [(_ `(seq ,e3 ,e4)) `(seq (seq ,e1 ,e3) ,e4)]
       [(_ _) `(seq ,e1 ,e2)]))
 
@@ -377,6 +326,14 @@
       (make-seq-pair e1 e2)
       (apply make-seq (make-seq-pair e1 e2) es)))
 
+(define (no-effect? expr)
+  (match expr
+    [`(const ,_) #t]
+    [`(primref ,_) #t]
+    [`(lambda (,params ...) ,eb) #t]
+    [`(ref ,x) #t]
+    [_ #f]))
+
 ;; Helper to ignore sequence expressions and just return the last expression in the sequence.
 (define (result e)
   (match e
@@ -384,22 +341,22 @@
     [else e]))
 
 ;; Handles copy propogation and inlining at a variable reference site.
-;; x-var is the variable reference site. e is the expression that x-var refers to.
-(define (copy x-var e context)
-  (match-define `(var ,x ,op ,s ,loc-x) x-var)
+;; x is the variable reference site. e is the expression that x refers to.
+(define (copy x e context)
+  (match-define (var x-sym op flags source-flags) x)
 
   (define e-tag (car e))
 
   (define context-type
     (match context
-      [`(app ,op ,c ,loc) 'app]
+      [(app-context ops c inlined?) 'app]
       [_ context]))
 
   (define immutable-var-ref?
     (if (equal? e-tag 'ref)
-        (match-let ([`(ref ,y-var) e])
-          (match-define `(var ,y ,op-y ,s-y ,loc-y) y-var)
-          (not (set-member? s-y 'assign)))
+        (match-let ([`(ref ,y) e])
+          (match-define (var y-sym y-op y-flags y-source-flags) y)
+          (not (set-member? y-source-flags 'assign)))
         #f))
 
   (cond
@@ -410,14 +367,14 @@
 
     ;; Propogate immutable variables
     [immutable-var-ref?
-      (match-define `(ref ,y-var) e)
-      (match-define `(var ,y ,op-y ,s-y ,loc-y) y-var)
+      (match-define `(ref ,y) e)
+      (match-define (var y-sym y-op y-flags y-source-flags) y)
 
-      `(ref ,y-var)]
+      `(ref ,y)]
 
     ;; Inline lambdas and primitive references into application contexts and try to beta reduce them?
     [(and (equal? context-type 'app) (or (equal? e-tag 'lambda) (equal? e-tag 'primref)))
-      (match-define `(app ,op ,c ,loc) context)
+      (match-define (app-context ops c inlined?) context)
       (fold-expr e context (hash))]
 
     ;; A primref is basically a constant. So just propogate it.
@@ -432,21 +389,21 @@
 
     ;; Otherwise, just leave the reference alone (mark it as a reference if needed).
     [else
-      (store-set-var-flags! loc-x (set-add (store-var-flags-ref loc-x) 'ref))
-      `(ref ,x-var)]))
+      (set-add! flags 'ref)
+      `(ref ,x)]))
 
 ;; Tries to reduce an application of a lambda or primitive.
 (define (fold-expr expr context env)
   (match expr
     [`(primref ,p)
-      (match-define `(app ,ops ,app-context ,context-loc) context)
+      (match-define (app-context ops outer-context inlined?) context)
       (define op-es (map (lambda (op) (visit-op op 'value)) ops))
       (match (map result op-es)
         ;; All the args are constant, so just apply the primitive.
         [(list `(const ,cs) ...)
          (define p-fun (hash-ref primitives p))
          (define new-c (apply p-fun cs)) ;; Note: Should probably check for arity errors here
-         (mark-inlined! context-loc)
+         (set-box! inlined? #t)
          `(const ,new-c)]
 
         ;; Otherwise, just leave the primitive application alone.
@@ -457,22 +414,20 @@
 
 ;; Try beta reducing the lambda
 (define (fold-lambda expr context env)
-  (match-define `(app ,ops ,app-context ,context-loc) context)
+  (match-define (app-context ops outer-context inlined?) context)
   (match-define `(lambda (,params ...) ,eb) expr)
 
-  (define params^ (copy-variables params))
-  (define params^^ (map (lambda (p^ op) (variable-set-op p^ op)) params^ ops))
-  (define eb-env (extend-env env params params^^))
+  (define params^ (map (lambda (p^ op) (variable-set-op p^ op)) (copy-variables params) ops))
+  (define eb-env (extend-env env params params^))
 
   ;; This may propogate operands into the body
-  (define eb^ (optimize eb app-context eb-env))
+  (define eb^ (optimize eb outer-context eb-env))
 
   (define can-reduce #t)
   (define op-es
-    (for/list ([p params^^])
-      (match-define `(var ,p-sym ,op ,s ,loc-p) p)
+    (for/list ([p params^])
+      (match-define (var p-sym p-op p-flags p-source-flags) p)
 
-      (define p-flags (store-var-flags-ref loc-p))
       (define p-is-ref (set-member? p-flags 'ref))
       (define p-is-assign (set-member? p-flags 'assign))
 
@@ -480,21 +435,21 @@
         ;; There are no more references to the parameter. So, this
         ;; operand does not prevent us from beta reducing the lambda.
         [(and (not p-is-ref) (not p-is-assign))
-          (visit-op op 'effect)]
+          (visit-op p-op 'effect)]
 
         ;; There are references or assignments to the parameter still,
         ;; so we cannot beta reduce.
         [(and (not p-is-ref) p-is-assign)
           (set! can-reduce #f)
-          (visit-op op 'effect)]
+          (visit-op p-op 'effect)]
         [else
           (set! can-reduce #f)
-          (visit-op op 'value)])))
+          (visit-op p-op 'value)])))
   
-  (mark-inlined! context-loc)
+  (set-box! inlined? #t)
   (if can-reduce
       (apply make-seq (append op-es (list eb^)))
-      `(call (lambda (,@params^^) ,eb^) ,@op-es)))
+      `(call (lambda (,@params^) ,eb^) ,@op-es)))
 
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
 (define (init-extra-data expr [env (hash)])
@@ -538,7 +493,7 @@
 ;; Remove extra data from the AST.
 (define (remove-extra-data expr)
   (match expr
-    [`(var ,x ,op ,s ,loc-x) x]
+    [(var x-sym op flags source-flags) x-sym]
 
     [`(const ,c) c]
 
