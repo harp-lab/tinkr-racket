@@ -345,6 +345,8 @@ def (main)
 		       [(lam [e] [e e]) (lam [f] [f f])]]]
 
   {
+    (debug_print (write (lam ["g"] "g")))
+
     ;; trace
     (debug_print (write (trace p1 "AOE")))
     (debug_print (write (trace p2 "AOE")))

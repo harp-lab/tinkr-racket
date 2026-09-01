@@ -37,9 +37,11 @@ def (write s=`[str ,len_hash ,cstr])
 
 
 def (= `[str ,len_hash0 ,cstr0] `[str ,len_hash1 ,cstr1])
-  (bless (equal len_hash0 len_hash1))
+  if (bless (equal len_hash0 len_hash1))
+     (bless (cstr_equal cstr0 cstr1))
+     false
 
-
+blessed (cstr_equal cstr0 cstr1) (equal (call_2 "strcmp" (cstr_t cstr0) (cstr_t cstr1)) 0)
 
 blessed (cstr_println s)
 {
@@ -114,9 +116,9 @@ blessed (str_len_hash s len h)
   len0 = (u64plus len 1)
   
   if (eq (deref (cstr_t s0)) 0)
-    ;; Set the tag as 1 (could be a different tag) in order for the len_hash to be treated as a regular tagged value.
-    ;; Untagged values can cause bugs elsewhere, for example, with object/slice delimiters.
-    return (set_tag (cons_u32 len0 h0) 1)
+    ;; Set the least significant bit to 0 in order for the len_hash not to be treated as a special value.
+    ;; Untagged values can cause bugs elsewhere, for example, with object/slice delimiters or the empty object value.
+    return (u64bit_and (cons_u32 len0 h0) "0xfffffffffffffffe")
     return (str_len_hash s0 len0 h0)
 }
 
