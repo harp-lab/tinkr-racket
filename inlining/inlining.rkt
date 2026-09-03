@@ -1,62 +1,11 @@
 #lang racket
 
-(define p1
-  `((lambda (x) x) 5))
+(provide optimize-prog
+         effort-bound)
 
-(define p2
-  `(lambda (a)
-    (let x 3
-      (if (zero? a)
-          x
-          5))))
+;; Parameters
+(define effort-bound 10)
 
-(define p3
-  `((lambda (x)
-      ((lambda (f)
-        (f 6))
-       (lambda (y)
-        (x y))))
-    (lambda (z) z)))
-
-(define p4
-  `((lambda (x)
-      ((lambda (f)
-        (f 6))
-       (lambda (y)
-        (add1 (x y)))))
-    (lambda (z) z)))
-
-(define p5
-  `(((lambda (x)
-      (lambda (y)
-        (if (zero? y)
-            (x y)
-            (add1 (x y)))))
-    (lambda (z) z))
-    1))
-
-(define p6
- '(let f (lambda (g) (g g))
-    (let z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))
-      (let y (lambda (m) (m 4))
-        (let x (y z)
-          (+ 7 (f x)))))))
-
-(define p7
-  `(let f (lambda (a b)
-            (a b))
-      (f (lambda (x) x) 1)))
-
-(define p8
- '(lambda (h)
-    (let f (lambda (g) (g g))
-      (let z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))
-        (let y (lambda (m) (m 4))
-          (let x (h (y z))
-            (+ 7 (f x))))))))
-
-(define p9
-  `((lambda (x) (x x)) (lambda (x) (x x))))
 
 ;; A Context is one of 'effect, 'test, 'value, or an AppContext
 
@@ -80,13 +29,17 @@
    inlined?]      ;; (BoxOf Bool)
   #:transparent)
 
+(struct environment
+  [bindings         ;; (HashOf Var Var)
+   effort-counter]  ;; (or #f (BoxOf Integer))
+  #:transparent)
+
 (define primitives (hash 'add1 add1
                          'zero? zero?
                          '+ +
+                         '- -
+                         '* *
                          '< <))
-
-(define (construct-operands exps env)
-  (map (lambda (e) (opnd e env (box #f))) exps))
 
 ;; Expr -> Expr
 (define (optimize-prog prog [recur-count 5])
@@ -94,14 +47,17 @@
     (cond
       [(<= recur-count 0) prog]
       [else
-        (displayln (remove-extra-data prog))
-        (define prog^ (optimize prog 'value (hash)))
+        ;;(displayln (remove-extra-data prog))
+        (define prog^ (optimize prog 'value (environment (hash) (box 0))))
 
         (if (alpha-equiv? prog prog^)
             prog
             (opt-helper prog^ (- recur-count 1)))]))
 
   (remove-extra-data (opt-helper (init-extra-data prog) recur-count)))
+
+(define (construct-operands exps env)
+  (map (lambda (e) (opnd e (copy-env env) (box #f))) exps))
 
 (define (make-gensym sym)
   (define count 0)
@@ -114,12 +70,22 @@
 (define (alphatize p [env (hash)] [gen-sym (make-gensym 'x)])
   (define (recur p env)
     (alphatize p env gen-sym))
-  
+
   (match p
-    [`(lambda (,x) ,e)
-      (define x^ (gen-sym))
-      (define e-env (hash-set env x x^))
-      `(lambda (,x^) ,(recur e e-env))]
+    ['void 'void]
+    [(? number? n) n]
+    [(? boolean? b) b]
+    [(? string? s) s]
+    [`(primref ,p) `(primref ,p)]
+
+    [`(lambda (,params ...) ,eb)
+      (define params^ (map (lambda (x) (gen-sym)) params))
+      (define eb-env
+        (for/fold ([eb-env env])
+                  ([x params]
+                   [x^ params^])
+          (hash-set eb-env x x^)))
+      `(lambda (,@params^) ,(recur eb eb-env))]
 
     [`(let ,x ,e ,be)
       (recur `((lambda (,x) ,be) ,e) env)]
@@ -130,17 +96,14 @@
     [`(seq ,e1 ,e2)
      `(seq ,(recur e1 env) ,(recur e2 env))]
 
-    [`(,e1 ,e2)
-     `(,(recur e1 env) ,(recur e2 env))]
-
     [(? symbol? p) #:when (set-member? (hash-keys primitives) p)
      p]
 
     [(? symbol? x)
      (hash-ref env x)]
 
-    [_
-     p]))
+    [`(,ef ,eas ...)
+     `(,(recur ef env) ,@(map (lambda (ea) (recur ea env)) eas))]))
 
 (define (alpha-equiv? p0 p1)
   (equal? (alphatize (remove-extra-data p0)) (alphatize (remove-extra-data p1))))
@@ -154,11 +117,34 @@
 (define (copy-variables xs)
   (map copy-variable xs))
 
+(define (copy-env env)
+  (define counter (environment-effort-counter env))
+  (environment (environment-bindings env)
+               (if counter counter (box 0))))
+
+(define (env-ref env x)
+  (hash-ref (environment-bindings env) x))
+
 (define (extend-env env xs xs^)
-  (for/fold ([env env])
-            ([x xs]
-             [x^ xs^])
-    (hash-set env x x^)))
+  (define bindings
+    (for/fold ([bindings (environment-bindings env)])
+              ([x xs]
+               [x^ xs^])
+      (hash-set bindings x x^)))
+
+  (environment
+    bindings
+    (environment-effort-counter env)))
+
+(define (get-env-effort env)
+  (unbox (environment-effort-counter env)))
+(define (set-env-effort! env effort)
+  (set-box! (environment-effort-counter env) effort))
+(define (inc-env-effort! env)
+  (define effort (get-env-effort env))
+  (if effort
+      (set-env-effort! env (add1 effort))
+      env))
 
 (define (new-variable x-sym)
   (var x-sym '() (mutable-set) (set)))
@@ -168,8 +154,6 @@
   (var x-sym op flags source-flags))
 
 ;; Expr Context Env -> Expr
-;; Mutates the global store as it goes; returns the optimized expression
-;; directly instead of invoking a continuation.
 (define (optimize expr context env)
   (match expr
     [`(const ,c)
@@ -273,7 +257,7 @@
     [`(ref ,x)
       (match-define (var x-sym x-op x-flags x-source-flags) x)
 
-      (define x^ (hash-ref env x))
+      (define x^ (env-ref env x))
       (match-define (var x^-sym op x^-flags x^-source-flags) x^)
 
       (cond
@@ -294,7 +278,7 @@
         [else
           ;; Get the operand expression and then try to copy it to the reference site.
           (define op-e (visit-op op 'value))
-          (copy x^ (result op-e) context)])]))
+          (copy x^ (result op-e) context env)])]))
 
 ;; Residualize an operand/argument expression (if it has already been visited,
 ;; it will use the cached version)
@@ -314,7 +298,7 @@
 
 ;; Helper to sequence expressions (ensuring that the
 ;; last expression in the sequence is not a sequence itself).
-(define (make-seq e1 e2 . es)
+(define (make-seq e1 . es)
   (define (make-seq-pair e1 e2)
     (match* (e1 e2)
       [((? no-effect? e1) _) e2]
@@ -323,8 +307,11 @@
 
   ;; Note: for more than two expression, void constants may not be removed here.
   (if (null? es)
-      (make-seq-pair e1 e2)
-      (apply make-seq (make-seq-pair e1 e2) es)))
+      e1
+      (let ([e2 (first es)])
+        (if (null? (rest es))
+          (make-seq-pair e1 e2)
+          (apply make-seq (make-seq-pair e1 e2) es)))))
 
 (define (no-effect? expr)
   (match expr
@@ -342,7 +329,7 @@
 
 ;; Handles copy propogation and inlining at a variable reference site.
 ;; x is the variable reference site. e is the expression that x refers to.
-(define (copy x e context)
+(define (copy x e context env)
   (match-define (var x-sym op flags source-flags) x)
 
   (define e-tag (car e))
@@ -363,7 +350,7 @@
     ;; Propogate constants
     [(equal? e-tag 'const)
       (match-define `(const ,c) e)
-      (optimize `(const ,c) context (hash))]
+      (optimize `(const ,c) context (environment (hash) (environment-effort-counter env)))]
 
     ;; Propogate immutable variables
     [immutable-var-ref?
@@ -372,13 +359,15 @@
 
       `(ref ,y)]
 
-    ;; Inline lambdas and primitive references into application contexts and try to beta reduce them?
+    ;; Inline lambdas and primitive references into application contexts and try to beta reduce them
     [(and (equal? context-type 'app) (or (equal? e-tag 'lambda) (equal? e-tag 'primref)))
       (match-define (app-context ops c inlined?) context)
-      (fold-expr e context (hash))]
+      (fold-expr e context (environment (hash) (environment-effort-counter env)))]
 
     ;; A primref is basically a constant. So just propogate it.
-    [(and (equal? context-type 'value) (equal? e-tag 'primref))
+    ;; TODO: Why does the paper only allow primref and not lambda, is it
+    ;; just for termination purposes?
+    [(and (equal? context-type 'value) (or (equal? e-tag 'primref)))
       e]
 
     ;; Lambdas, assignments, and primitive references are truthy (so the variable ref
@@ -401,16 +390,23 @@
       (match (map result op-es)
         ;; All the args are constant, so just apply the primitive.
         [(list `(const ,cs) ...)
-         (define p-fun (hash-ref primitives p))
-         (define new-c (apply p-fun cs)) ;; Note: Should probably check for arity errors here
-         (set-box! inlined? #t)
-         `(const ,new-c)]
+        (define p-fun (hash-ref primitives p))
+        (define new-c (apply p-fun cs)) ;; Note: Should probably check for arity errors here
+        (set-box! inlined? #t)
+        `(const ,new-c)]
 
         ;; Otherwise, just leave the primitive application alone.
         [_
           `(primref ,p)])]
     [`(lambda (,params ...) ,eb)
-      (fold-lambda expr context env)]))
+      (define effort (get-env-effort env))
+
+      ;; Bound the number of times we fold a lambda
+      (when (< effort effort-bound) (inc-env-effort! env))
+
+      (if (>= effort effort-bound)
+          (optimize expr 'value env)
+          (fold-lambda expr context env))]))
 
 ;; Try beta reducing the lambda
 (define (fold-lambda expr context env)
