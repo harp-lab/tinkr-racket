@@ -1,10 +1,17 @@
 #lang racket
 
 (provide optimize-prog
-         effort-bound)
+         effort-bound
+         set-effort-bound!
+         alphatize)
+
+;; NOTES:
+;;  - When aborting an inlining attempt, var structures are not reset to the original state in
+;;    any way. This could cause problems later on.
 
 ;; Parameters
-(define effort-bound 10)
+(define effort-bound 50)
+(define (set-effort-bound! v) (set! effort-bound v))
 
 
 ;; A Context is one of 'effect, 'test, 'value, or an AppContext
@@ -31,7 +38,8 @@
 
 (struct environment
   [bindings         ;; (HashOf Var Var)
-   effort-counter]  ;; (or #f (BoxOf Integer))
+   effort-counter   ;; (or #f (BoxOf Integer))
+   abort-kont]      ;; (or #f Continuation)
   #:transparent)
 
 (define primitives (hash 'add1 add1
@@ -47,8 +55,7 @@
     (cond
       [(<= recur-count 0) prog]
       [else
-        ;;(displayln (remove-extra-data prog))
-        (define prog^ (optimize prog 'value (environment (hash) (box 0))))
+        (define prog^ (optimize prog 'value (environment (hash) #f #f)))
 
         (if (alpha-equiv? prog prog^)
             prog
@@ -57,7 +64,7 @@
   (remove-extra-data (opt-helper (init-extra-data prog) recur-count)))
 
 (define (construct-operands exps env)
-  (map (lambda (e) (opnd e (copy-env env) (box #f))) exps))
+  (map (lambda (e) (opnd e env (box #f))) exps))
 
 (define (make-gensym sym)
   (define count 0)
@@ -87,7 +94,7 @@
           (hash-set eb-env x x^)))
       `(lambda (,@params^) ,(recur eb eb-env))]
 
-    [`(let ,x ,e ,be)
+    [`(let ([,x ,e]) ,be)
       (recur `((lambda (,x) ,be) ,e) env)]
 
     [`(if ,g ,e1 ,e2)
@@ -117,34 +124,48 @@
 (define (copy-variables xs)
   (map copy-variable xs))
 
-(define (copy-env env)
-  (define counter (environment-effort-counter env))
-  (environment (environment-bindings env)
-               (if counter counter (box 0))))
+(define (start-counter env do)
+  (if (environment-effort-counter env)
+      (do env)
+      (let/ec kont
+        (do (environment
+              (environment-bindings env)
+              (box 0)
+              kont)))))
 
 (define (env-ref env x)
-  (hash-ref (environment-bindings env) x))
+  (hash-ref (environment-bindings env) (var-name x)))
 
 (define (extend-env env xs xs^)
   (define bindings
     (for/fold ([bindings (environment-bindings env)])
               ([x xs]
                [x^ xs^])
-      (hash-set bindings x x^)))
+      (hash-set bindings (var-name x) x^)))
 
   (environment
     bindings
-    (environment-effort-counter env)))
+    (environment-effort-counter env)
+    (environment-abort-kont env)))
 
 (define (get-env-effort env)
-  (unbox (environment-effort-counter env)))
+  (if (environment-effort-counter env)
+      (unbox (environment-effort-counter env))
+      #f))
 (define (set-env-effort! env effort)
-  (set-box! (environment-effort-counter env) effort))
+  (when (environment-effort-counter env)
+        (set-box! (environment-effort-counter env) effort)))
 (define (inc-env-effort! env)
   (define effort (get-env-effort env))
   (if effort
       (set-env-effort! env (add1 effort))
       env))
+
+(define (remove-env-bindings env)
+  (environment (hash) (environment-effort-counter env) (environment-abort-kont env)))
+
+(define (abort-inlining-attempt env)
+  ((environment-abort-kont env) #f))
 
 (define (new-variable x-sym)
   (var x-sym '() (mutable-set) (set)))
@@ -155,6 +176,12 @@
 
 ;; Expr Context Env -> Expr
 (define (optimize expr context env)
+  (define effort (get-env-effort env))
+  (when effort
+    (if (< effort effort-bound)
+        (inc-env-effort! env)
+        (abort-inlining-attempt env)))
+
   (match expr
     [`(const ,c)
       (cond
@@ -307,10 +334,15 @@
 
   ;; Note: for more than two expression, void constants may not be removed here.
   (if (null? es)
-      e1
-      (let ([e2 (first es)])
-        (if (null? (rest es))
+      e1 ;; No need for a seq
+
+      (let ([e2 (first es)]
+            [es (rest es)])
+        (if (null? es)
+          ;; Only two expressions, so just make a seq pair
           (make-seq-pair e1 e2)
+
+          ;; More than two expressions, so make a seq pair for the first two and then recur
           (apply make-seq (make-seq-pair e1 e2) es)))))
 
 (define (no-effect? expr)
@@ -350,7 +382,7 @@
     ;; Propogate constants
     [(equal? e-tag 'const)
       (match-define `(const ,c) e)
-      (optimize `(const ,c) context (environment (hash) (environment-effort-counter env)))]
+      (optimize `(const ,c) context (remove-env-bindings env))]
 
     ;; Propogate immutable variables
     [immutable-var-ref?
@@ -362,7 +394,7 @@
     ;; Inline lambdas and primitive references into application contexts and try to beta reduce them
     [(and (equal? context-type 'app) (or (equal? e-tag 'lambda) (equal? e-tag 'primref)))
       (match-define (app-context ops c inlined?) context)
-      (fold-expr e context (environment (hash) (environment-effort-counter env)))]
+      (fold-expr e context (remove-env-bindings env))]
 
     ;; A primref is basically a constant. So just propogate it.
     ;; TODO: Why does the paper only allow primref and not lambda, is it
@@ -399,14 +431,16 @@
         [_
           `(primref ,p)])]
     [`(lambda (,params ...) ,eb)
-      (define effort (get-env-effort env))
+      (define rv
+        (start-counter env
+          (lambda (env^)
+            (fold-lambda expr context env^))))
+      
+      (if rv
+          rv
 
-      ;; Bound the number of times we fold a lambda
-      (when (< effort effort-bound) (inc-env-effort! env))
-
-      (if (>= effort effort-bound)
-          (optimize expr 'value env)
-          (fold-lambda expr context env))]))
+          ;; We must have aborted, so just optimize for value
+          (optimize expr 'value env))]))
 
 ;; Try beta reducing the lambda
 (define (fold-lambda expr context env)
@@ -474,7 +508,7 @@
 
       `(lambda (,@new-params) ,(init-extra-data eb eb-env))]
 
-    [`(let ,x ,e ,be)
+    [`(let ([,x ,e]) ,be)
       (recur `((lambda (,x) ,be) ,e))]
 
     [`(,e1 ,args ...)
@@ -500,7 +534,7 @@
      `(if ,(remove-extra-data g) ,(remove-extra-data e1) ,(remove-extra-data e2))]
     
     [`(call (lambda (,x) ,eb) ,e)
-     `(let ,(remove-extra-data x) ,(remove-extra-data e) ,(remove-extra-data eb))]
+     `(let ([,(remove-extra-data x) ,(remove-extra-data e)]) ,(remove-extra-data eb))]
 
     [`(lambda (,params ...) ,eb)
       `(lambda (,@(map remove-extra-data params)) ,(remove-extra-data eb))]

@@ -1,16 +1,25 @@
 #lang racket
 
-(require "inlining.rkt")
+(require rackunit "inlining.rkt")
+
+(define (alpha-equiv? p0 p1)
+  (equal? (alphatize p0) (alphatize p1)))
 
 (define p1
   `((lambda (x) x) 5))
 
+(check-equal? (optimize-prog p1) 5)
+
 (define p2
   `(lambda (a)
-    (let x 3
+    (let ([x 3])
       (if (zero? a)
           x
           5))))
+
+(check-equal? (alpha-equiv? (optimize-prog p2) '(lambda (a3243) (if (zero? a3243) 3 5)))
+              #t)
+(check-equal? ((eval (optimize-prog p2)) 0) ((eval p2) 0))
 
 (define p3
   `((lambda (x)
@@ -20,45 +29,49 @@
         (x y))))
     (lambda (z) z)))
 
-(define p4
-  `((lambda (x)
-      ((lambda (f)
-        (f 6))
-       (lambda (y)
-        (add1 (x y)))))
-    (lambda (z) z)))
+(check-equal? (eval (optimize-prog p3)) (eval p3))
 
-(define p5
+(define p4
   `(((lambda (x)
       (lambda (y)
         (if (zero? y)
             (x y)
             (add1 (x y)))))
-    (lambda (z) z))
+     (lambda (z) z))
     1))
 
-(define p6
- '(let f (lambda (g) (g g))
-    (let z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))
-      (let y (lambda (m) (m 4))
-        (let x (y z)
+(check-equal? (eval (optimize-prog p4)) (eval p4))
+
+(define p5
+ '(let ([f (lambda (g) (g g))])
+    (let ([z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))])
+      (let ([y (lambda (m) (m 4))])
+        (let ([x (y z)])
           (+ 7 (f x)))))))
 
-(define p7
-  `(let f (lambda (a b)
-            (a b))
+(check-equal? (eval (optimize-prog p5)) (eval p5))
+
+(define p6
+  `(let ([f (lambda (a b)
+            (a b))])
       (f (lambda (x) x) 1)))
 
-(define p8
+(check-equal? (eval (optimize-prog p6)) (eval p6))
+
+(define p7
  '(lambda (h)
-    (let f (lambda (g) (g g))
-      (let z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))
-        (let y (lambda (m) (m 4))
-          (let x (h (y z))
+    (let ([f (lambda (g) (g g))])
+      (let ([z (lambda (n) (if (< n 10) (lambda (x) 5) (lambda (x) 15)))])
+        (let ([y (lambda (m) (m 4))])
+          (let ([x (h (y z))])
             (+ 7 (f x))))))))
 
-(define p9
+(check-equal? ((eval (optimize-prog p7)) (lambda (x) x)) ((eval p7) (lambda (x) x)))
+
+(define p8
   `((lambda (x) (x x)) (lambda (x) (x x))))
+
+(check-equal? (alpha-equiv? (optimize-prog p8) p8) #t)
 
 ;; TODO: letrec
 (define p10
