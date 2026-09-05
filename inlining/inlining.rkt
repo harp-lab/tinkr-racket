@@ -2,7 +2,9 @@
 
 (provide optimize-prog
          effort-bound
+         size-bound
          set-effort-bound!
+         set-size-bound!
          alphatize)
 
 ;; NOTES:
@@ -11,14 +13,17 @@
 
 ;; Parameters
 (define effort-bound 50)
+(define size-bound 30)
+
 (define (set-effort-bound! v) (set! effort-bound v))
+(define (set-size-bound! v) (set! size-bound v))
 
 
 ;; A Context is one of 'effect, 'test, 'value, or an AppContext
 
 (struct opnd
   [exp     ;; Expr
-   env     ;; (HashOf Var Var)
+   env     ;; Environment
    cache]  ;; (BoxOf Expr)
   #:transparent)
 
@@ -28,7 +33,7 @@
    flags          ;; (MutableSetOf VarFlag)
    source-flags]  ;; (SetOf VarFlag)
   #:transparent)
-;; Where VarFlag can be one of 'ref or 'assign
+;; Where VarFlag can be one of 'ref or 'assign or 'copied
 
 (struct app-context
   [ops            ;; (ListOf Opnd)
@@ -39,6 +44,8 @@
 (struct environment
   [bindings         ;; (HashOf Var Var)
    effort-counter   ;; (or #f (BoxOf Integer))
+   size-total       ;; (or #f (BoxOf Integer))
+   size-delta       ;; (or #f (BoxOf Integer))
    abort-kont]      ;; (or #f Continuation)
   #:transparent)
 
@@ -55,7 +62,7 @@
     (cond
       [(<= recur-count 0) prog]
       [else
-        (define prog^ (optimize prog 'value (environment (hash) #f #f)))
+        (define prog^ (optimize prog 'value (environment (hash) #f #f #f #f)))
 
         (if (alpha-equiv? prog prog^)
             prog
@@ -64,7 +71,14 @@
   (remove-extra-data (opt-helper (init-extra-data prog) recur-count)))
 
 (define (construct-operands exps env)
-  (map (lambda (e) (opnd e env (box #f))) exps))
+  (map (lambda (e)
+          (define env^
+            (environment (environment-bindings env)
+                         (environment-effort-counter env)
+                         (box 0) ;; Different size counter for each operand
+                         (environment-size-delta env)
+                         (environment-abort-kont env)))
+          (opnd e env^ (box #f))) exps))
 
 (define (make-gensym sym)
   (define count 0)
@@ -124,13 +138,15 @@
 (define (copy-variables xs)
   (map copy-variable xs))
 
-(define (start-counter env do)
+(define (start-counters env do)
   (if (environment-effort-counter env)
       (do env)
       (let/ec kont
         (do (environment
               (environment-bindings env)
-              (box 0)
+              (box 0) ;; Start effort counter
+              #f      ;; Do not start total size counter
+              (box 0) ;; Start delta size counter
               kont)))))
 
 (define (env-ref env x)
@@ -146,6 +162,8 @@
   (environment
     bindings
     (environment-effort-counter env)
+    (environment-size-total env)
+    (environment-size-delta env)
     (environment-abort-kont env)))
 
 (define (get-env-effort env)
@@ -161,8 +179,56 @@
       (set-env-effort! env (add1 effort))
       env))
 
+(define (get-env-size-total env)
+  (if (environment-size-total env)
+      (unbox (environment-size-total env))
+      #f))
+(define (set-env-size-total! env size)
+  (when (environment-size-total env)
+        (set-box! (environment-size-total env) size)))
+(define (inc-env-size-total! env)
+  (define size (get-env-size-total env))
+  (if size
+      (set-env-size-total! env (add1 size))
+      env))
+
+(define (get-env-size-delta env)
+  (if (environment-size-delta env)
+      (unbox (environment-size-delta env))
+      #f))
+(define (set-env-size-delta! env size)
+  (when (environment-size-delta env)
+        (set-box! (environment-size-delta env) size)))
+(define (inc-env-size-delta! env)
+  (define size (get-env-size-delta env))
+  (if size
+      (set-env-size-delta! env (add1 size))
+      env))
+
+(define (inc-size-total! env)
+  (accumulate-size-total! env 1))
+(define (accumulate-size-total! env add-size)
+  (define size (get-env-size-total env))
+  (when size
+    (set-env-size-total! env (+ size add-size))))
+
+(define (inc-size-delta! env)
+  (define size (get-env-size-delta env))
+  (when size
+    (if (< size size-bound)
+        (inc-env-size-delta! env)
+        (abort-inlining-attempt env))))
+(define (accumulate-size-delta! env add-size)
+  (define size (get-env-size-delta env))
+  (when (and size (not (< (+ size add-size) size-bound)))
+    (displayln (format "aborting because of size: size = ~a, add-size = ~a" size add-size)))
+  (when size
+    (if (< (+ size add-size) size-bound)
+        (set-env-size-delta! env (+ size add-size))
+        (abort-inlining-attempt env))))
+
 (define (remove-env-bindings env)
-  (environment (hash) (environment-effort-counter env) (environment-abort-kont env)))
+  (environment (hash) (environment-effort-counter env) (environment-size-total env) (environment-size-delta env) (environment-abort-kont env)))
 
 (define (abort-inlining-attempt env)
   ((environment-abort-kont env) #f))
@@ -184,6 +250,8 @@
 
   (match expr
     [`(const ,c)
+      (inc-size-total! env)
+
       (cond
         [(equal? context 'effect) '(const void)]
 
@@ -198,9 +266,14 @@
     [`(seq ,e1 ,e2)
       (define e1^ (optimize e1 'effect env))
       (define e2^ (optimize e2 context env))
+
+      (inc-size-total! env) ;; Note: overly-conservative size estimate since make-seq may discard e1.
+
       (make-seq e1^ e2^)]
 
     [`(if ,g ,e1 ,e2)
+      (inc-size-total! env)
+
       (define g^ (optimize g 'test env))
       (define g-res (result g^))
 
@@ -238,8 +311,8 @@
 
     [`(lambda (,params ...) ,eb)
       (match context
-        ['test '(const #t)]
-        ['effect '(const void)]
+        ['test (inc-size-total! env) '(const #t)]
+        ['effect (inc-size-total! env) '(const void)]
 
         ;; Just leave the lambda alone (and recur down the body)
         ['value
@@ -248,6 +321,9 @@
           (define eb-env (extend-env env params params^))
 
           (define eb^ (optimize eb 'value eb-env))
+
+          (inc-size-total! env)
+
           `(lambda (,@params^) ,eb^)]
 
         ;; Lambda is in an application context, so try to beta reduce (i.e. fold) it.
@@ -270,13 +346,18 @@
         ;; ef has not been inlined, so process the operands and then return the call expression
         [else
           (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+
+          (inc-size-total! env)
+          (for ([op ops])
+            (accumulate-size-total! env (get-env-size-total (opnd-env op))))
+
           `(call ,ef^ ,@op-es)])]
 
     [`(primref ,x)
       (cond
-        [(equal? context 'test) '(const #t)]
-        [(equal? context 'effect) '(const void)]
-        [(equal? context 'value) `(primref ,x)]
+        [(equal? context 'test) (inc-size-total! env) '(const #t)]
+        [(equal? context 'effect) (inc-size-total! env) '(const void)]
+        [(equal? context 'value) (inc-size-total! env) `(primref ,x)]
 
         ;; Application context, so try to apply the primitive.
         [else (fold-expr `(primref ,x) context env)])]
@@ -290,6 +371,7 @@
       (cond
         ;; If in an effect context, then we don't care about the reference
         [(equal? context 'effect)
+          (inc-size-total! env)
           '(const void)]
 
         ;; If x^ is not bound to an operand or it is a mutable reference,
@@ -299,12 +381,24 @@
           ;; Mark it as a ref if it wasn't already.
           (set-add! x^-flags 'ref)
 
+          (inc-size-total! env)
+
           `(ref ,x^)]
 
         ;; Otherwise, we can try to copy/propogate the value of x^ into the reference site.
         [else
           ;; Get the operand expression and then try to copy it to the reference site.
           (define op-e (visit-op op 'value))
+
+          (define op-size (get-env-size-total (opnd-env op)))
+
+          (if (set-member? x^-flags 'copied)
+              (accumulate-size-delta! env op-size)
+              
+              ;; Hasn't been copied before, so mark it as copied and there is no need to accumulate
+              ;; the size delta for the first copy.
+              (set-add! x^-flags 'copied))
+
           (copy x^ (result op-e) context env)])]))
 
 ;; Residualize an operand/argument expression (if it has already been visited,
@@ -398,7 +492,7 @@
 
     ;; A primref is basically a constant. So just propogate it.
     ;; TODO: Why does the paper only allow primref and not lambda, is it
-    ;; just for termination purposes?
+    ;; for code size reasons?
     [(and (equal? context-type 'value) (or (equal? e-tag 'primref)))
       e]
 
@@ -422,17 +516,19 @@
       (match (map result op-es)
         ;; All the args are constant, so just apply the primitive.
         [(list `(const ,cs) ...)
-        (define p-fun (hash-ref primitives p))
-        (define new-c (apply p-fun cs)) ;; Note: Should probably check for arity errors here
-        (set-box! inlined? #t)
-        `(const ,new-c)]
+          (define p-fun (hash-ref primitives p))
+          (define new-c (apply p-fun cs)) ;; Note: Should probably check for arity errors here
+          (set-box! inlined? #t)
+          (inc-size-total! env)
+          `(const ,new-c)]
 
         ;; Otherwise, just leave the primitive application alone.
         [_
+          (inc-size-total! env)
           `(primref ,p)])]
     [`(lambda (,params ...) ,eb)
       (define rv
-        (start-counter env
+        (start-counters env
           (lambda (env^)
             (fold-lambda expr context env^))))
       
@@ -477,6 +573,11 @@
           (visit-op p-op 'value)])))
   
   (set-box! inlined? #t)
+
+  (inc-size-total! env)
+  (for ([op ops])
+    (accumulate-size-total! env (get-env-size-total (opnd-env op))))
+
   (if can-reduce
       (apply make-seq (append op-es (list eb^)))
       `(call (lambda (,@params^) ,eb^) ,@op-es)))
@@ -547,3 +648,19 @@
 
     [`(ref ,x)
      (remove-extra-data x)]))
+
+
+(module+ test
+  (require rackunit)
+  
+  (define (test-size-count op-e)
+    (define op-test
+      (opnd (init-extra-data op-e) (environment (hash) #f (box 0) #f #f) (box #f)))
+    (visit-op op-test 'value)
+    (get-env-size-total (opnd-env op-test)))
+
+  (check-equal? (test-size-count '(lambda (x) x))
+                2)
+
+  (check-equal? (test-size-count '(lambda (x) (+ 4 5 8 4 0 5 4 8 9 7 5 3 4 6 8 (x (lambda (i) i)))))
+                22))

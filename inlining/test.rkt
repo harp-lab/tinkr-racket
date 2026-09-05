@@ -5,6 +5,12 @@
 (define (alpha-equiv? p0 p1)
   (equal? (alphatize p0) (alphatize p1)))
 
+(define (ast-size ast)
+  (match ast
+    [(list e ...) (+ 1 (apply + (map ast-size e)))]
+    [(cons e1 e2) (+ 1 (ast-size e1) (ast-size e2))]
+    [_ 1]))
+
 (define p1
   `((lambda (x) x) 5))
 
@@ -143,35 +149,89 @@
 
 ;; 8 calls to f
 (define p-e7
-  `(let f (lambda (f) (+ (f 5) (f 5) (f 5)))
-    (let g1
+  `(let ([f (lambda (f) (+ (f 5) (f 5) (f 5)))])
+    (let ([g1
       (lambda (g1)
-        (let g2
+        (let ([g2
           (lambda (g2)
-            (+ (g2 (lambda (k) k)) (g2 (lambda (k) (add1 k)))))
-          (+ (g2 g1) (g2 g1))))
+            (+ (g2 (lambda (k) k)) (g2 (lambda (k) (add1 k)))))])
+          (+ (g2 g1) (g2 g1))))])
       (+ (g1 f) (g1 f)))))
 
 ;; Should be 128 calls to f
 (define p-e8
-  `(let f (lambda (f) (+ (f 5) (f 5) (f 5)))
-    (let g1
+  `(let ([f (lambda (f) (+ (f 5) (f 5) (f 5)))])
+    (let ([g1
       (lambda (g1)
-        (let g2
+        (let ([g2
           (lambda (g2)
-            (let g3
+            (let ([g3
               (lambda (g3)
-                (let g4
+                (let ([g4
                   (lambda (g4)
-                    (let g5
+                    (let ([g5
                       (lambda (g5)
-                        (let g6
+                        (let ([g6
                           (lambda (g6)
-                            (+ (g6 (lambda (k) k)) (g6 (lambda (k) k))))
-                          (+ (g6 g5) (g6 g5))))
-                      (+ (g5 g4) (g5 g4))))
-                  (+ (g4 g3) (g4 g3))))
-              (+ (g3 g2) (g3 g2))))
-          (+ (g2 g1) (g2 g1))))
+                            (+ (g6 (lambda (k) k)) (g6 (lambda (k) k))))])
+                          (+ (g6 g5) (g6 g5))))])
+                      (+ (g5 g4) (g5 g4))))])
+                  (+ (g4 g3) (g4 g3))))])
+              (+ (g3 g2) (g3 g2))))])
+          (+ (g2 g1) (g2 g1))))])
       (+ (g1 f) (g1 f)))))
 
+
+;; Size bound tests
+
+;; p-s1 should not inline y because it is too large
+(define p-s1
+  `(let ([y (lambda (x) (+ 0 0 0 0 0 0 0 0 0 0 0 0 0
+                           0 (x (lambda (i) i))))])
+    (lambda (x) (+ (y x) (y x) (y x) (y x)))))
+
+;; p-s2 should inline y because it is small enough
+(define p-s2
+  `(let ([y (lambda (x) (+ 0 (x (lambda (i) i))))])
+    (lambda (x) (+ (y x) (y x) (y x) (y x)))))
+
+;; p-s3 should inline y (even though it would normally be too large) because it is only called once
+(define p-s3
+  `(let ([y (lambda (x) (+ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                           0 (x (lambda (i) i))))])
+    (lambda (x) (y x))))
+
+;; p-s4 should inline y no matter the size of the let's body
+(define p-s4
+  `(lambda (unknown-f)
+    (let ([y (lambda (x) (+ 0 (x (lambda (i) i))))])
+      (unknown-f
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        (lambda (x) (+ (y x) (y x) (y x) (y x)))))))
+
+(define (larger? p)
+  (> (ast-size (optimize-prog p)) (ast-size p)))
+
+(define (smaller? p)
+  (< (ast-size (optimize-prog p)) (ast-size p)))
+
+(define (no-change? p)
+  (alpha-equiv? (optimize-prog p) p))
+
+(define (test-size-bound)
+  (set-size-bound! 30)
+  (set-effort-bound! 1000000000000000) ;; ignore effort bound for these tests
+
+  (check-equal? (no-change? p-s1) #t)
+  (check-equal? (ast-size (optimize-prog p-s2)) 46)
+  (check-equal? (smaller? p-s3) #t)
+  (check-equal? (larger? p-s4) #t))
+
+(test-size-bound)
