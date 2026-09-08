@@ -7,6 +7,8 @@
          set-size-bound!
          alphatize)
 
+;; Based on "Fast and Effective Procedure Inlining" (https://dl.acm.org/doi/10.5555/647166.717859)
+
 ;; NOTES:
 ;;  - When aborting an inlining attempt, var structures are not reset to the original state in
 ;;    any way. This could cause problems later on.
@@ -119,6 +121,10 @@
 
     [(? symbol? p) #:when (set-member? (hash-keys primitives) p)
      p]
+
+    ;; Externals
+    [(? symbol? x) #:when (not (hash-has-key? env x))
+     x]
 
     [(? symbol? x)
      (hash-ref env x)]
@@ -362,6 +368,15 @@
         ;; Application context, so try to apply the primitive.
         [else (fold-expr `(primref ,x) context env)])]
 
+    [`(extern-ref ,x)
+      (cond
+        [(equal? context 'test) (inc-size-total! env) '(const #t)]
+        [(equal? context 'effect) (inc-size-total! env) '(const void)]
+        [(equal? context 'value) (inc-size-total! env) `(extern-ref ,x)]
+
+        ;; Application context, can't fold an extern-ref, so just return it.
+        [else `(extern-ref ,x)])]
+
     [`(ref ,x)
       (match-define (var x-sym x-op x-flags x-source-flags) x)
 
@@ -392,6 +407,10 @@
 
           (define op-size (get-env-size-total (opnd-env op)))
 
+          ;; Note: this is overly conservative. We should be able to copy
+          ;;   things like constants and immutable references for free.
+          ;;   Also, for lambdas, if they get folded after propogation, then
+          ;;   we should take the resulting size into account.
           (if (set-member? x^-flags 'copied)
               (accumulate-size-delta! env op-size)
               
@@ -443,8 +462,19 @@
   (match expr
     [`(const ,_) #t]
     [`(primref ,_) #t]
+    [`(extern-ref ,_) #t]
     [`(lambda (,params ...) ,eb) #t]
     [`(ref ,x) #t]
+    [_ #f]))
+
+(define (truthy? expr)
+  (match expr
+    [`(const #f) #f]
+    [`(const ,_) #t]
+    [`(primref ,_) #t]
+    [`(extern-ref ,_) #t]
+    [`(assign ,_ ,_) #t]
+    [`(lambda (,params ...) ,eb) #t]
     [_ #f]))
 
 ;; Helper to ignore sequence expressions and just return the last expression in the sequence.
@@ -486,21 +516,28 @@
       `(ref ,y)]
 
     ;; Inline lambdas and primitive references into application contexts and try to beta reduce them
+    ;; Note: If the folding fails, then the lambda will still be inlined into the application site. This
+    ;;   could cause extra work by duplicating closure creation.
     [(and (equal? context-type 'app) (or (equal? e-tag 'lambda) (equal? e-tag 'primref)))
       (match-define (app-context ops c inlined?) context)
       (fold-expr e context (remove-env-bindings env))]
 
     ;; A primref is basically a constant. So just propogate it.
-    ;; TODO: Why does the paper only allow primref and not lambda, is it
-    ;; for code size reasons?
-    [(and (equal? context-type 'value) (or (equal? e-tag 'primref)))
+    ;; Lambdas wouldn't be much of a benfit here and could instead decrease performance.
+    ;; - TODO: could check if this is the only place the lambda is referenced (and that it's
+    ;;   not referenced under another lambda to prevent duplication of closure creation), then
+    ;;   we could propogate it here to remove the binding.
+    [(and (equal? context-type 'value) (equal? e-tag 'primref))
       e]
 
-    ;; Lambdas, assignments, and primitive references are truthy (so the variable ref
-    ;; to them can be replaced with #t)
+    ;; Truthy values in a test context can be replaced with #t (includes lambda, primrefs, etc.)
     [(and (equal? context-type 'test)
-          (or (equal? e-tag 'lambda) (equal? e-tag 'assign) (equal? e-tag 'primref)))
+          (truthy? e))
       '(const #t)]
+
+    ;; Can allways propogate a extern-ref.
+    [(equal? e-tag 'extern-ref)
+      e]
 
     ;; Otherwise, just leave the reference alone (mark it as a reference if needed).
     [else
@@ -618,6 +655,9 @@
     [(? symbol? x) #:when (set-member? (hash-keys primitives) x)
      `(primref ,x)]
 
+    [(? symbol? x) #:when (not (hash-has-key? env x))
+     `(extern-ref ,x)]
+
     [(? symbol? x)
      `(ref ,(hash-ref env x))]))
 
@@ -645,6 +685,9 @@
 
     [`(primref ,p)
      p]
+
+    [`(extern-ref ,x)
+     x]
 
     [`(ref ,x)
      (remove-extra-data x)]))
