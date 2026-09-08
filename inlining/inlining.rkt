@@ -23,9 +23,10 @@
 
 ;; A Context is one of 'effect, 'test, 'value, or an AppContext
 
+;; env can be circular (which is why it's a Box).
 (struct opnd
   [exp     ;; Expr
-   env     ;; Environment
+   env     ;; (BoxOf Environment)
    cache]  ;; (BoxOf Expr)
   #:transparent)
 
@@ -77,10 +78,10 @@
           (define env^
             (environment (environment-bindings env)
                          (environment-effort-counter env)
-                         (box 0) ;; Different size counter for each operand
+                         (box 0) ;; Different total size counter for each operand
                          (environment-size-delta env)
                          (environment-abort-kont env)))
-          (opnd e env^ (box #f))) exps))
+          (opnd e (box env^) (box #f))) exps))
 
 (define (make-gensym sym)
   (define count 0)
@@ -112,6 +113,17 @@
 
     [`(let ([,x ,e]) ,be)
       (recur `((lambda (,x) ,be) ,e) env)]
+
+    [`(letrec ([,xs ,es] ...) ,eb)
+     (define xs^ (map (lambda (x) (gen-sym)) xs))
+     (define eb-env
+        (for/fold ([eb-env env])
+                  ([x xs]
+                   [x^ xs^])
+          (hash-set eb-env x x^)))
+
+     (define bindings (map (lambda (x^ e) `(,x^ ,(recur e eb-env))) xs^ es))
+     `(letrec (,@bindings) ,(recur eb eb-env))]
 
     [`(if ,g ,e1 ,e2)
      `(if ,(recur g env) ,(recur e1 env) ,(recur e2 env))]
@@ -171,6 +183,36 @@
     (environment-size-total env)
     (environment-size-delta env)
     (environment-abort-kont env)))
+
+(define (extend-env-circular env xs xs^)
+  (define bindings
+    (for/fold ([bindings (environment-bindings env)])
+              ([x xs]
+               [x^ xs^])
+      (hash-set bindings (var-name x) x^)))
+
+  (define env^
+    (environment
+      bindings
+      (environment-effort-counter env)
+      (environment-size-total env)
+      (environment-size-delta env)
+      (environment-abort-kont env)))
+  
+  ;; Make the environment circular
+  (for ([x^ xs^])
+    (define x^-env-box (opnd-env (var-op x^)))
+    (define x^-env (unbox x^-env-box))
+    (set-box!
+      x^-env-box
+      (environment
+        bindings
+        (environment-effort-counter env)
+        (environment-size-total x^-env)
+        (environment-size-delta env)
+        (environment-abort-kont env))))
+
+  env^)
 
 (define (get-env-effort env)
   (if (environment-effort-counter env)
@@ -237,6 +279,7 @@
   (environment (hash) (environment-effort-counter env) (environment-size-total env) (environment-size-delta env) (environment-abort-kont env)))
 
 (define (abort-inlining-attempt env)
+  (displayln "ABORTING INLINING ATTEMPT")
   ((environment-abort-kont env) #f))
 
 (define (new-variable x-sym)
@@ -355,9 +398,12 @@
 
           (inc-size-total! env)
           (for ([op ops])
-            (accumulate-size-total! env (get-env-size-total (opnd-env op))))
+            (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
 
           `(call ,ef^ ,@op-es)])]
+
+    [`(letrec ([,xs ,es] ...) ,eb)
+     (handle-letrec expr context env)]
 
     [`(primref ,x)
       (cond
@@ -405,7 +451,7 @@
           ;; Get the operand expression and then try to copy it to the reference site.
           (define op-e (visit-op op 'value))
 
-          (define op-size (get-env-size-total (opnd-env op)))
+          (define op-size (get-env-size-total (unbox (opnd-env op))))
 
           ;; Note: this is overly conservative. We should be able to copy
           ;;   things like constants and immutable references for free.
@@ -423,7 +469,7 @@
 ;; Residualize an operand/argument expression (if it has already been visited,
 ;; it will use the cached version)
 (define (visit-op op context)
-  (match-define (opnd e env cache) op)
+  (match-define (opnd e (box env) cache) op)
   (define c (unbox cache))
 
   (cond
@@ -613,11 +659,58 @@
 
   (inc-size-total! env)
   (for ([op ops])
-    (accumulate-size-total! env (get-env-size-total (opnd-env op))))
+    (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
 
   (if can-reduce
       (apply make-seq (append op-es (list eb^)))
       `(call (lambda (,@params^) ,eb^) ,@op-es)))
+
+(define (handle-letrec expr context env)
+  (match-define `(letrec ([,xs ,es] ...) ,eb) expr)
+  (define folded? #f)
+
+  (define ops (construct-operands es env))
+  (define xs^ (copy-variables xs))
+  (define xs^-with-ops (map (lambda (x^ op) (variable-set-op x^ op)) xs^ ops))
+
+  ;; This may propogate operands into the body causing too much effort or increased size.
+  ;; So we need to start the counters.
+  (define propgated-eb
+    (start-counters env
+      (lambda (env^)
+        ;; Create a new (circular) environment with the operands bound
+        (define eb-env-with-ops (extend-env-circular env^ xs xs^-with-ops))
+
+        (define eb^ (optimize eb context eb-env-with-ops))
+        
+        eb^)))
+
+  (define eb^
+    (cond
+      [(not propgated-eb)
+        ;; We must have aborted, so just optimize without the operands being bound
+        (define eb-env (extend-env env xs xs^))
+
+        ;; The old ops have an incorrect environment, so create new ones
+        (set! ops (construct-operands es eb-env))
+
+        (optimize eb context eb-env)]
+      [else
+        propgated-eb]))
+
+  ;; TODO: We could do more advanced handling of letrec here in order to prune unnessesary bindings.
+
+  (cond
+    [folded? eb^]
+    [else
+      (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+
+      (inc-size-total! env)
+      (for ([op ops])
+        (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
+
+      (define bindings (map (lambda (x^ op-e) `(,x^ ,op-e)) xs^ op-es))
+      `(letrec (,@bindings) ,eb^)]))
 
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
 (define (init-extra-data expr [env (hash)])
@@ -646,8 +739,20 @@
 
       `(lambda (,@new-params) ,(init-extra-data eb eb-env))]
 
-    [`(let ([,x ,e]) ,be)
-      (recur `((lambda (,x) ,be) ,e))]
+    [`(let ([,x ,e]) ,eb)
+      (recur `((lambda (,x) ,eb) ,e))]
+
+    [`(letrec ([,xs ,es] ...) ,eb)
+      (define-values (eb-env xs^)
+        (for/foldr ([eb-env env]
+                    [xs^ (list)])
+                   ([x xs])
+          (define x^ (new-variable x))
+          (values (hash-set eb-env x x^)
+                  (cons x^ xs^))))
+
+      `(letrec (,@(map (lambda (x^ e) `(,x^ ,(init-extra-data e eb-env))) xs^ es))
+        ,(init-extra-data eb eb-env))]
 
     [`(,e1 ,args ...)
      `(call ,(recur e1) ,@(map recur args))]
@@ -677,6 +782,11 @@
     [`(call (lambda (,x) ,eb) ,e)
      `(let ([,(remove-extra-data x) ,(remove-extra-data e)]) ,(remove-extra-data eb))]
 
+    [`(letrec ([,xs ,es] ...) ,eb)
+     (define bindings (map (lambda (x e) `(,(remove-extra-data x) ,(remove-extra-data e))) xs es))
+     `(letrec (,@bindings)
+       ,(remove-extra-data eb))]
+
     [`(lambda (,params ...) ,eb)
       `(lambda (,@(map remove-extra-data params)) ,(remove-extra-data eb))]
 
@@ -698,9 +808,9 @@
   
   (define (test-size-count op-e)
     (define op-test
-      (opnd (init-extra-data op-e) (environment (hash) #f (box 0) #f #f) (box #f)))
+      (opnd (init-extra-data op-e) (box (environment (hash) #f (box 0) #f #f)) (box #f)))
     (visit-op op-test 'value)
-    (get-env-size-total (opnd-env op-test)))
+    (get-env-size-total (unbox (opnd-env op-test))))
 
   (check-equal? (test-size-count '(lambda (x) x))
                 2)

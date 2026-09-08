@@ -2,6 +2,11 @@
 
 (require rackunit "inlining.rkt")
 
+(define default-effort-bound 100)
+(define default-size-bound 30)
+(set-effort-bound! default-effort-bound)
+(set-size-bound! default-size-bound)
+
 ;; ----- Helpers -----
 
 (define (alpha-equiv? p0 p1)
@@ -71,7 +76,7 @@
           (+ 7 (f x)))))))
 
 (check-equal? (eval (optimize-prog p5)) (eval p5))
-(check-equal? (optimize-prog p5) '12) ;; See section 4.3 of cp0 paper to solve this.
+(check-equal? (optimize-prog p5 1) '12) ;; See section 4.3 of cp0 paper to solve this.
 
 (define p6
   `(let ([f (lambda (a b)
@@ -118,6 +123,48 @@
       (f 9))))
 
 (check-equal? (optimize-prog p-alpha) '10)
+
+;; Letrec test cases
+
+(define letrec-1
+  `(letrec ([fact (lambda (n)
+                    (if (< n 2)
+                        1
+                        (* n (fact (- n 1)))))])
+    (fact 5)))
+
+(check-equal? (no-change? letrec-1) #t)
+
+(define letrec-2
+  `(letrec ([fact (lambda (n)
+                    (let ([base-case 1])
+                      (if (< n 2)
+                          base-case
+                          (* n (fact (- n 1))))))])
+    (fact 5)))
+
+(check-equal? (smaller? letrec-2) #t)
+
+(define letrec-3
+  `(letrec ([f (lambda (x) (if (zero? x) 1 (* x (f (- x 1)))))]
+            [g (displayln "world")]
+            [a (lambda (x) (b x))]
+            [b (lambda (x) (a x))])
+    (f 5)))
+
+(check-equal? (smaller? letrec-3) #t) ;; TODO: This needs more advanced letrec handling
+
+(define letrec-4
+  `(letrec ([a b]
+            [b 1]
+            [c 2]
+            [d a]
+            [e (+ a b c d)])
+    (+ e 1)))
+
+(check-equal? (alpha-equiv? (optimize-prog letrec-4 default-iterations)
+                            '(letrec [(a 1) (b 1) (c 2) (d 1) (e 5)] 6))
+              #t)
 
 ;; Effort bound test cases
 
@@ -228,7 +275,10 @@
   (check-equal? (smaller? p-s3) #t)
   (check-equal? (larger? p-s4) #t)
   (check-equal? (smaller? p-s5) #t)
-  (check-equal? (smaller? p-s6) #t))
+  (check-equal? (smaller? p-s6) #t)
+
+  (set-effort-bound! default-effort-bound)
+  (set-size-bound! default-size-bound))
 
 (test-size-bound)
 
@@ -248,14 +298,6 @@
 
 
 
-
-;; TODO: letrec
-(define t-p10
-  `(letrec fact (lambda (n)
-                  (if (< n 2)
-                      1
-                      (* n (fact (- n 1)))))
-    (fact 5)))
 
 (define t-p11
   `((lambda (x) ((x x) x)) (lambda (y) ((y y) y))))
@@ -277,7 +319,10 @@
     (let ([f (lambda (y) x)])
       (call-f-100-times f))))
 
-
+;; f should be folded, but we are not handling mutliple arguments correctly.
+(define t-p16
+  '(let ([f (lambda (a b) (if a b 5))])
+    (f #t (foo 6))))
 
 
 
