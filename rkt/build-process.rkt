@@ -27,6 +27,8 @@
    no-strict-aliasing?
    show-flags?
    print-cmds?
+   well-known?
+   inlining?
    c-compiler-flags
    c-linker-flags]
   #:transparent)
@@ -55,7 +57,7 @@
        (thunk)))))
 
 ;; Spins up a new process to handle a small set of files/X folders 
-(define (spawn-compile-one folder-names separate-logs)
+(define (spawn-compile-one folder-names options)
   (spawn-safe
    (lambda ()
      (define rkt-path 
@@ -68,10 +70,12 @@
 	       rkt-path ;; This worker handles a list of folders
 	       (foldl string-append ""
 		      (map (lambda (name)
-			     (format "(compile-one \"~a\")" name))
+			     (format "(compile-one \"~a\" ~a ~a)" name
+           (build-options-well-known? options)
+           (build-options-inlining? options)))
 			   folder-names))))
      
-     (when separate-logs
+     (when (build-options-separate-logs? options)
       (set! error-file-tag (car folder-names))) ; Seperates the error files by thread if enabled
      (run-cmd (find-executable-path "racket") "-e" cmd))))
 
@@ -125,7 +129,7 @@
 ;; Compiles only the modules of the given build (its symlinked subdirs) —
 ;; NOT everything ever cached under /tmp/ti/files: a stale or broken source
 ;; elsewhere in the cache must not affect (or slow down) unrelated builds.
-(define (compile-all-parallel project [separate-logs #f])
+(define (compile-all-parallel project options)
   (define dirlst
     (for/list ([entry (in-list (directory-list project))]
                #:when (directory-exists? (build-path project entry)))
@@ -135,7 +139,7 @@
       (group-by (λ (_) (begin0 i (set! i (modulo (add1 i) 7))))
                 dirlst))) ;; Spin up 7 worker processes:
   (for/list ([group (in-list groups)])
-            (spawn-compile-one group separate-logs)))
+            (spawn-compile-one group options)))
 
 
 (define (run-cmd prog . args)

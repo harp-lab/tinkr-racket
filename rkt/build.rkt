@@ -218,7 +218,7 @@
 
   ;; Launch ~7 independent racket processes
   ;; These tackle the initial per-module compilation
-  (define ti-comp-threads (compile-all-parallel project (build-options-separate-logs? options)))
+  (define ti-comp-threads (compile-all-parallel project options))
   (wait-on-all-threads ti-comp-threads)
 
   ;; Compile an init module for globals

@@ -1,0 +1,6 @@
+
+def (main)
+{
+  let f (lambda (x) (+ x 1))
+  (debug_print (write (f 5)))
+}

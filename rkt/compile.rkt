@@ -10,7 +10,8 @@
    "free-vars.rkt"
    "annotate-well-known.rkt"
    "closure-convert.rkt"
-   "well-known.rkt")
+   "well-known.rkt"
+   "inlining.rkt")
 
 
 (provide compile-one) 
@@ -18,8 +19,9 @@
 
 ;;;;;;;; Compiles one files/nm/file.ext0 to nm/file.ext1 ;;;;;;;;;
 
-
-(define (compile-one folder-name)
+;; opt-well-known?: whether to lift well-known defs to the top level
+;; opt-inlining?: whether to perform inlining optimizations
+(define (compile-one folder-name opt-well-known? opt-inlining?)
   (define dir (build-path "/tmp/ti/files" folder-name))
 
   (define (compile-step src-ext dest-ext step-func)
@@ -46,11 +48,24 @@
    
   (compile-step ".ti" ".ti_loaded" load-module-pass)
   (compile-step ".ti_loaded" ".core" desugar-pass)
-  (compile-step ".core" ".core_alpha" alphatize-pass)
+
+  (if opt-inlining?
+    (begin
+      (compile-step ".core" ".core_inlining" (make-pass inlining-pass))
+      (compile-step ".core_inlining" ".core_alpha" alphatize-pass))
+    
+    (compile-step ".core" ".core_alpha" alphatize-pass))
+
   (compile-step ".core_alpha" ".core_free" annotate-free-vars-pass)
-  (compile-step ".core_free" ".core_ann_well_known" annotate-well-known-pass)
-  (compile-step ".core_ann_well_known" ".core_well_known" lift-well-known-defs-pass)
-  (compile-step ".core_well_known" ".core_clo" clo-convert-pass)
+
+  (if opt-well-known?
+    (begin
+      (compile-step ".core_free" ".core_ann_well_known" annotate-well-known-pass)
+      (compile-step ".core_ann_well_known" ".core_well_known" lift-well-known-defs-pass)
+      (compile-step ".core_well_known" ".core_clo" clo-convert-pass))
+
+    (compile-step ".core_free" ".core_clo" clo-convert-pass))
+  
   (compile-step ".core_clo" ".core_limited_params" limit-def-params-pass)
   (compile-step ".core_limited_params" ".core_anf" anf-convert-pass)
   (compile-step ".core_anf" ".core_cps" cps-convert-pass)
@@ -66,6 +81,10 @@
 (define (load-module-pass src-path)
   (load-module src-path))
 
+(define (make-pass pass)
+  (lambda (src-path)
+    (define mod (with-input-from-file src-path read))
+    (pass mod)))
 
 (define (desugar-pass src-path)
   ;;(define mod (load-module src-path))
