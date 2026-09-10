@@ -11,7 +11,7 @@
    "annotate-well-known.rkt"
    "closure-convert.rkt"
    "well-known.rkt"
-   "inlining.rkt")
+   "inlining/inlining.rkt")
 
 
 (provide compile-one) 
