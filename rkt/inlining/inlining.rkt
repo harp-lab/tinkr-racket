@@ -37,6 +37,7 @@
 
 ;; Expr Environment -> Expr
 (define (optimize/ast ast context env)
+
   (match ast
     [`(const ,c)
       (inc-size-total! env)
@@ -162,41 +163,9 @@
 
     ;; Inner def
     [`(def ((ref ,fx) ,params ...) ,anns ... ,body ,more)
-     ;; TODO: handle siblings
+     (handle-inner-def ast context env)]
 
-     (define fn-val `(fn (,@params) (,@anns) ,body))
-     (define fx-op (construct-operand fn-val env))
-     (define fx^ (copy-variable fx))
-     (define fx^-with-op (variable-set-op fx^ fx-op))
-
-     ;; Optimize `more` with `fx` mapped to `fx^`
-     ;; We need to use try-optimize since propogating may increase size or effort too much.
-     (define more^
-      (try-optimize env
-        (lambda (env^)
-          (define more-env-with-op (extend-env env^ (list fx) (list fx^-with-op)))
-          (optimize/ast more (replace-app-context context 'value) more-env-with-op))
-        (lambda () ;; On abort:
-          (define more-env (extend-env env (list fx) (list fx^))) ;; Optimize without the operand bound
-          (optimize/ast more (replace-app-context context 'value) more-env))))
-     
-     (match-define (var fx-sym _ flags source-flags) fx^)
-     (define fx-is-ref (set-member? flags 'ref))
-
-     (if (not fx-is-ref)
-         ;; The def is no longer needed
-         more^
-
-         ;; Otherwise, visit the def for value
-         (let ([op-e (visit-op fx-op 'value)])
-          (inc-size-total! env)
-          (accumulate-size-total! env (get-env-size-total (unbox (opnd-env fx-op))))
-
-          (match-define `(fn (,params^ ...) ,_ ,body^) op-e)
-
-          `(def ((ref ,fx) ,@params^) ,@anns ,body^ ,more^)))]
-
-    [`(fn ((ref ,params) ...) ,anns ,body)
+    [`(fn (,(or `(ref ,params) `(|...| (ref ,params))) ...) ,anns ,body)
       (match context
         ['test (inc-size-total! env) '(const true)]
         ['effect (inc-size-total! env) '(const void)]
@@ -211,7 +180,9 @@
 
           (inc-size-total! env)
 
-          `(fn (,@(map add-ref params^)) ,anns ,body^)]
+          (define new-fn `(fn (,@(map add-ref params^)) ,anns ,body^))
+
+          (fn-rename-annotations new-fn env)]
 
         ;; Function is in an application context, so try to apply it.
         [(app-context ops c inlined?)
@@ -298,6 +269,56 @@
           (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
 
         `(,ef^ ,@op-es)])]))
+
+(define (handle-inner-def ast context env)
+  (define-values (defs more) (get-nested-sibling-defs ast))
+
+  (define fxs
+    (for/list ([def (in-list defs)])
+      (match-define `(def ((ref ,fx) ,params ...) ,anns ... ,bod) def)
+      fx))
+
+  (define fn-vals
+    (for/list ([def (in-list defs)])
+      (match-define `(def ((ref ,fx) ,params ...) ,anns ... ,body) def)
+      `(fn (,@params) (,@anns) ,body)))
+
+  (define fx-ops (construct-operands fn-vals env))
+  (define fxs^ (copy-variables fxs))
+  (define fxs^-with-op (map (lambda (fx^ op) (variable-set-op fx^ op)) fxs^ fx-ops))
+
+  ;; Optimize `more` with each `fx` mapped its corresponding `fx^`
+  ;; We need to use try-optimize since propogating may increase size or effort too much.
+  (define more^
+    (try-optimize env
+      (lambda (env^)
+        (define more-env-with-op (extend-env-circular env^ fxs fxs^-with-op))
+        (optimize/ast more (replace-app-context context 'value) more-env-with-op))
+      (lambda () ;; On abort:
+        (define more-env (extend-env env fxs fxs^)) ;; Optimize without the operands bound
+
+        ;; The old ops have an incorrect environment, so create new ones
+        (set! fx-ops (construct-operands fn-vals more-env))
+
+        (optimize/ast more (replace-app-context context 'value) more-env))))
+  
+  ;; TODO: prune unused defs
+
+  (define fx-op-es (map (lambda (op) (visit-op op 'value)) fx-ops))
+
+  (inc-size-total! env)
+  (for ([op fx-ops])
+    (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
+
+  ;; Reconstruct newly optimized defs
+  (define defs^
+    (for/list ([op-e fx-op-es]
+               [fx^ fxs^])
+      (match-define `(fn (,params^ ...) ,anns ,body^) op-e)
+
+      `(def ((ref ,fx^) ,@params^) ,@anns ,body^)))
+  
+  (nest-sibling-defs defs^ more^))
 
 ;; Opnd Context -> Expr
 ;; Residualize an operand/argument expression (if it has already been visited,
@@ -418,6 +439,25 @@
     [`(extern-ref ,_) #t]
     [`(fallback-ref ,_) #t]
     [_ (displayln 'TODO-extend-truthy?) #f]))
+
+(define (fn-rename-annotations fn env)
+  (match-define `(fn ,params ,annotations ,body) fn)
+  
+  (define fail-to-ann (get-annotation annotations 'fail_to))
+
+  (cond
+    [fail-to-ann
+      (match-define `((ref ,x)) fail-to-ann)
+
+      (define x^
+        (if (hash-has-key? (environment-bindings env) x)
+            (var-name (hash-ref (environment-bindings env) x))
+            x))
+      
+      (define annotations^ (set-annotation annotations 'fail_to (list `(ref ,x^))))
+
+      `(fn ,params ,annotations^ ,body)]
+    [else `(fn ,params ,annotations ,body)]))
 
 ;; Expr [HashOf Var Var] -> Expr
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
