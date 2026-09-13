@@ -1,10 +1,18 @@
 table (program expr)
 
+table (src expr str int int int int)
+
 union (expr (bound_var str)
   (free_var str)
   (num_lit int)
   (str_lit str)
   (sym_lit str)
+  (true_lit)
+  (false_lit)
+  (eq_prim)
+  (num_prim str)
+  (cmp_prim str)
+  (str_prim str)
   (slice [expr])
   (object str [expr])
   (lam [str] expr)
@@ -17,7 +25,21 @@ union (expr (bound_var str)
 
 union (call_ctx (seed) (out_of_reach) app)
 union (heap_ctx seed out_of_reach app)
-union (val (closure lam call_ctx) (alloc expr heap_ctx) (idk))
+union (val
+  (closure lam call_ctx)
+  (alloc expr heap_ctx)
+  num_lit
+  str_lit
+  sym_lit
+  true_lit
+  false_lit
+  eq_prim
+  num_prim
+  cmp_prim
+  str_prim
+  (abs_num call_ctx)
+  (abs_str call_ctx)
+  (idk))
 
 table (store str call_ctx val)
 table (heap expr heap_ctx int val)
@@ -26,6 +48,7 @@ table (has_escaped val)
 table (has_escapeds [val])
 table (bind_params_to [str] [val] call_ctx)
 table (bind_params_to_idk [str] call_ctx)
+table (live_branch expr call_ctx expr)
 
 demand (eval expr call_ctx) val
 demand (evals [expr] call_ctx) [val]
@@ -45,9 +68,15 @@ rule (freevar (def f xs eb er) x) <-- (freevar eb x) (= 0 (lmem xs x)) (/= x f)
 rule (freevar (def f xs eb er) x) <-- (freevar er x) (/= x f)
 rule (freevars [e es ...] x) <-- (freevar e x) | (freevars es x)
 
-rule (eval (num_lit n) c (idk))
-rule (eval (str_lit s) c (idk))
-rule (eval (sym_lit s) c (idk))
+rule (eval (num_lit n) c (num_lit n))
+rule (eval (str_lit s) c (str_lit s))
+rule (eval (sym_lit s) c (sym_lit s))
+rule (eval (true_lit) c (true_lit))
+rule (eval (false_lit) c (false_lit))
+rule (eval (eq_prim) c (eq_prim))
+rule (eval (num_prim op) c (num_prim op))
+rule (eval (cmp_prim op) c (cmp_prim op))
+rule (eval (str_prim op) c (str_prim op))
 rule (eval (free_var x) c (idk))
 rule (eval (notmodeled what) c (idk))
 rule (eval (lam xs eb) c (closure (lam xs eb) c))
@@ -69,6 +98,39 @@ rule (apply (closure (lam xs eb) cb) vs c2 v) <-- (eval eb c2 v)
 rule (bind_params_to xs vs c2) <-- (apply (closure (lam xs eb) cb) vs c2)
 rule (store y c2 vy) <-- (apply (closure (lam xs eb) cb) vs c2) (freevar (lam xs eb) y) (store y cb vy)
 rule (apply (idk) vs c2 (idk))
+rule (apply (eq_prim) [v v] c2 (true_lit)) <-- (= v (num_lit _)) | (= v (str_lit _)) | (= v (sym_lit _)) | (= v (true_lit)) | (= v (false_lit))
+rule (apply (eq_prim) [va vb] c2 (false_lit)) <-- (/= va vb)
+  ((= va (num_lit _))
+    | (= va (str_lit _))
+    | (= va (sym_lit _))
+    | (= va (true_lit))
+    | (= va (false_lit)))
+  ((= vb (num_lit _))
+    | (= vb (str_lit _))
+    | (= vb (sym_lit _))
+    | (= vb (true_lit))
+    | (= vb (false_lit)))
+
+rule (apply (eq_prim) [va vb] c2 (idk)) <-- (= va (idk)) | (= va (closure _ _)) | (= va (alloc _ _)) | (= va (eq_prim))
+rule (apply (eq_prim) [va vb] c2 (idk)) <-- (= vb (idk)) | (= vb (closure _ _)) | (= vb (alloc _ _)) | (= vb (eq_prim))
+rule (apply (eq_prim) [va vb] c2 (true_lit)) <-- (= va (abs_num _)) | (= vb (abs_num _)) | (= va (abs_str _)) | (= vb (abs_str _))
+rule (apply (eq_prim) [va vb] c2 (false_lit)) <-- (= va (abs_num _)) | (= vb (abs_num _)) | (= va (abs_str _)) | (= vb (abs_str _))
+
+rule (apply (num_prim op) vs c2 (abs_num c2))
+rule (apply (str_prim op) vs c2 (abs_str c2))
+
+rule (apply (cmp_prim "<") [(num_lit a) (num_lit b)] c2 (true_lit)) <-- (< a b)
+rule (apply (cmp_prim "<") [(num_lit a) (num_lit b)] c2 (false_lit)) <-- (>= a b)
+rule (apply (cmp_prim "<=") [(num_lit a) (num_lit b)] c2 (true_lit)) <-- (<= a b)
+rule (apply (cmp_prim "<=") [(num_lit a) (num_lit b)] c2 (false_lit)) <-- (> a b)
+rule (apply (cmp_prim ">") [(num_lit a) (num_lit b)] c2 (true_lit)) <-- (> a b)
+rule (apply (cmp_prim ">") [(num_lit a) (num_lit b)] c2 (false_lit)) <-- (<= a b)
+rule (apply (cmp_prim ">=") [(num_lit a) (num_lit b)] c2 (true_lit)) <-- (>= a b)
+rule (apply (cmp_prim ">=") [(num_lit a) (num_lit b)] c2 (false_lit)) <-- (< a b)
+rule (apply (cmp_prim op) [va vb] c2 (true_lit)) <-- (= va (abs_num _)) | (= vb (abs_num _))
+rule (apply (cmp_prim op) [va vb] c2 (false_lit)) <-- (= va (abs_num _)) | (= vb (abs_num _))
+rule (apply (cmp_prim op) [va vb] c2 (idk)) <-- (= va (idk)) | (= vb (idk))
+
 rule (has_escapeds vs) <-- (apply (idk) vs c2)
 rule (apply (alloc site hc) vs c2 (idk))
 rule (has_escapeds vs) (has_escaped (alloc site hc)) <-- (apply (alloc site hc) vs c2)
@@ -83,8 +145,10 @@ rule (bind_params_to_idk xs (out_of_reach)) (eval eb (out_of_reach)) <-- (has_es
 rule (store y (out_of_reach) vy) <-- (has_escaped (closure (lam xs eb) cb)) (freevar (lam xs eb) y) (store y cb vy)
 rule (has_escaped v) <-- (has_escaped (closure (lam xs eb) cb)) (eval eb (out_of_reach) v)
 
-rule (eval (if ec et ee) c v) <-- (eval ec c vc) (eval et c v)
-rule (eval (if ec et ee) c v) <-- (eval ec c vc) (eval ee c v)
+rule (live_branch (if ec et ee) c ee) <-- (eval (if ec et ee) c) (eval ec c (false_lit))
+rule (live_branch (if ec et ee) c et) <-- (eval (if ec et ee) c) (eval ec c vc) (/= vc (false_lit)) (/= vc (idk))
+rule (live_branch (if ec et ee) c et) (live_branch (if ec et ee) c ee) <-- (eval (if ec et ee) c) (eval ec c (idk))
+rule (eval (if ec et ee) c v) <-- (live_branch (if ec et ee) c eb) (eval eb c v)
 
 rule (eval (let x er eb) c v) <-- (eval er c vr) (eval eb c v)
 rule (store x c vr) <-- (eval (let x er eb) c) (eval er c vr)
