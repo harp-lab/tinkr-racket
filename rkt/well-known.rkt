@@ -329,22 +329,3 @@
     (chain (chain-defs group)
                 (set-union (chain-free-vars group) reachable-calls-fvs)
                 (chain-well-known group))))
-
-;; (HashOf Symbol (SetOf Symbol)) -> (HashOf Symbol (SetOf Symbol))
-;; A naive implementation of finding the transitive closure of a graph.
-(define (transitive-closure graph)
-  (define (fixpoint graph previous)
-    (if (equal? graph previous)
-        graph
-        (fixpoint (reachable-step graph) graph)))
-
-  (fixpoint graph (hash)))
-
-(define (reachable-step graph)
-  (for/hash ([(h reachable-set) (in-hash graph)])
-    (define reachable-set+
-      (foldl set-union reachable-set
-        (for/list ([n (in-set reachable-set)])
-          (hash-ref graph n))))
-
-    (values h reachable-set+)))

@@ -52,10 +52,8 @@
         ;; We need the value of the constant still
         [else `(const ,c)])]
 
-    ;; TODO: do more with this
     [`(bless ,e0)
-     (inc-size-total! env)
-     `(bless ,e0)]
+     `(bless ,(optimize/ast e0 context env))]
 
     ;; Evalutate e1 for its effect, then evaluate e2 for the current context
     [`(seq ,e1 ,e2)
@@ -120,6 +118,12 @@
       (inc-size-total! env)
       `(,ctor ,@(map (lambda (e) (optimize/ast e 'value env)) es))]
 
+    ;; Simple reference propogation
+    [`(let (ref ,x) (ref ,y) ,body)
+      (define eb-env (extend-env env (list x) (list (env-ref env y))))
+      (optimize/ast body context eb-env)]
+
+    ;; General let case
     [`(let (ref ,x) ,rhs ,body)
      (define op (construct-operand rhs env))
      (define x^ (copy-variable x))
@@ -246,6 +250,14 @@
         [(effect-context? context) '(const void)]
         [else ast])]
 
+    [`((blessed-prim ,x) ,es ...)
+      (define es^ (map (lambda (e) (optimize/ast e 'value env)) es))
+
+      (inc-size-total! env)
+
+      ;; TODO: try to reduce
+      `((blessed-prim ,x) ,@es^)]
+
     ;; Untagged application
     [`(,ef ,es ...)
      ;; Create an application context for ef so that the processing of ef can
@@ -258,7 +270,8 @@
 
      (cond
       ;; Ignore the operands and just return the inlined result
-      [inlined? ef^]
+      [inlined?
+        ef^]
 
       ;; ef has not been inlined, so process the operands and then return the call expression
       [else
@@ -302,21 +315,51 @@
 
         (optimize/ast more (replace-app-context context 'value) more-env))))
   
-  ;; TODO: prune unused defs
-
   (define fx-op-es (map (lambda (op) (visit-op op 'value)) fx-ops))
 
+  ;; --- Prune unreferenced fx's
+
+  (define more-symb (gensym '__more__)) ;; `more` body node in the call graph
+  (define fx-symbs (map var-name fxs^))
+
+  ;; Sibling calls graph with the `more` body included
+  (define sibling-calls-graph
+    (for/hash ([expr (cons more^ fx-op-es)]
+               [node (cons more-symb fx-symbs)])
+      (define refs (get-references expr))
+      (define sibling-refs (filter (lambda (gx) (member gx fx-symbs)) (set->list refs)))
+
+      (values node sibling-refs)))
+
+  (define reachability-graph (transitive-closure sibling-calls-graph))
+  (define reachable-from-more (hash-ref reachability-graph more-symb))
+
+  (define (reachable-from-more? fx)
+    (set-member? reachable-from-more fx))
+
+  (define-values (fxs-pruned fx-op-es-pruned)
+    (for/fold ([fxs-pruned (list)]
+               [fx-op-es-pruned (list)])
+              ([fx^ (in-list fxs^)]
+               [fx-op-e (in-list fx-op-es)])
+      (if (reachable-from-more? (var-name fx^))
+          (values (append fxs-pruned (list fx^))
+                  (append fx-op-es-pruned (list fx-op-e)))
+          
+          (values fxs-pruned fx-op-es-pruned))))
+
   (inc-size-total! env)
-  (for ([op fx-ops])
+  ;; TODO: take the pruning into account:
+  (for ([op (in-list fx-ops)])
     (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
 
   ;; Reconstruct newly optimized defs
   (define defs^
-    (for/list ([op-e fx-op-es]
-               [fx^ fxs^])
+    (for/list ([op-e (in-list fx-op-es-pruned)]
+               [fx (in-list fxs-pruned)])
       (match-define `(fn (,params^ ...) ,anns ,body^) op-e)
 
-      `(def ((ref ,fx^) ,@params^) ,@anns ,body^)))
+      `(def ((ref ,fx) ,@params^) ,@anns ,body^)))
   
   (nest-sibling-defs defs^ more^))
 
@@ -345,11 +388,23 @@
 
   (define e-tag (car e))
 
+  ;; TODO: temp hack for constants
+  (define is-good?
+    (match e
+      [`((extern-ref _init_from_s64) ,a ,b ,c ,d) #t]
+      [_ #f]))
+
   (cond
     ;; Propogate constants
     [(equal? e-tag 'const)
-      (match-define `(const ,c) e)
-      (optimize/ast `(const ,c) context env)]
+      (optimize/ast e context env)]
+
+    ;; Small enough bless
+    [(and (equal? e-tag 'bless) (small-bless? e))
+      (optimize/ast e context env)]
+
+    [is-good?
+      (optimize/ast e context env)]
 
     ;; Propogate variable references
     [(or (equal? e-tag 'ref) (equal? e-tag 'fallback-ref))
@@ -379,7 +434,7 @@
       (set-add! flags 'ref)
       `(ref ,x)]))
 
-;; `(fn ...) Context Environment -> (or Expr #f)
+;; `(fn ...) AppContext Environment -> (or Expr #f)
 ;; Tries to apply a function.
 (define (apply-expr expr context env)
   (match expr
@@ -390,9 +445,48 @@
         (lambda () ;; On abort:
           #f))]))
 
+;; `(fn ...) AppContext Environment -> (or Expr #f)
 (define (apply-fn expr context env)
-  ;; TODO
-  (abort-inlining-attempt env))
+  (match-define (app-context ops outer-context inlined?) context)
+  (match-define `(fn ((ref ,params) ...) ,annotations ,body) expr)
+
+  (define params^ (map (lambda (p^ op) (variable-set-op p^ op)) (copy-variables params) ops))
+  (define body-env (extend-env env params params^))
+
+  ;; This may propogate operands into the body
+  (define body^ (optimize/ast body outer-context body-env))
+
+  (define can-apply #t)
+  (define op-es
+    (for/list ([p params^])
+      (match-define (var p-sym p-op p-flags p-source-flags) p)
+
+      (define p-is-ref (set-member? p-flags 'ref))
+      (define p-is-assign (set-member? p-flags 'assign))
+
+      (cond
+        ;; There are no more references to the parameter. So, this
+        ;; operand does not prevent us from applying the function.
+        [(not p-is-ref)
+          (visit-op p-op 'effect)]
+
+        ;; There are references to the parameter still,
+        ;; so we cannot apply.
+        [else
+          (set! can-apply #f)
+          (visit-op p-op 'value)])))
+
+  (if can-apply
+      (begin
+        (set-box! inlined? #t)
+
+        (inc-size-total! env)
+        (for ([op ops])
+          (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
+
+        (apply make-seq (append op-es (list body^))))
+      
+      #f))
 
 ;; Helper to sequence expressions (ensuring that the
 ;; last expression in the sequence is not a sequence itself).
@@ -440,6 +534,11 @@
     [`(fallback-ref ,_) #t]
     [_ (displayln 'TODO-extend-truthy?) #f]))
 
+(define (small-bless? expr)
+  (match expr
+    [`(bless (const ,c)) #t]
+    [_ #f]))
+
 (define (fn-rename-annotations fn env)
   (match-define `(fn ,params ,annotations ,body) fn)
   
@@ -449,7 +548,7 @@
     [fail-to-ann
       (match-define `((ref ,x)) fail-to-ann)
 
-      (define x^
+      (define x^ ;; TODO
         (if (hash-has-key? (environment-bindings env) x)
             (var-name (hash-ref (environment-bindings env) x))
             x))
@@ -459,16 +558,72 @@
       `(fn ,params ,annotations^ ,body)]
     [else `(fn ,params ,annotations ,body)]))
 
-;; Expr [HashOf Var Var] -> Expr
+;; Expr -> (SetOf Symbol)
+;; Gets references inside the expr. Assuming everything is alphatized.
+;; TODO: ideally this should not be needed. Should be able to calculate reference set during the main walk over the ast.
+(define (get-references expr)
+  (define (recur-es es)
+    (foldl (lambda (e acc)
+              (set-union acc (get-references e)))
+           (set) es))
+
+  (match expr
+    [`(const ,c) (set)]
+
+    [`(bless ,e0) (get-references e0)]
+
+    [`(seq ,e1 ,e2) (set-union (get-references e1) (get-references e2))]
+
+    [`(if ,g ,e1 ,e2) (set-union (get-references g) (get-references e1) (get-references e2))]
+
+    [`(continue-dispatch ,es ...)
+      (recur-es es)]
+    
+    ;; TODO:
+    [`(fail) (set)]
+
+    [`(,ell ,e0) #:when (eq? ell '|...|)
+      (get-references e0)]
+    
+    [`(,(and ctor (or 'object 'subword)) ,es ...)
+      (recur-es es)]
+
+    [`(let (ref ,x) ,rhs ,body)
+     (set-union (get-references rhs) (get-references body))]
+
+    [`(|[]| ,es ...)
+     (recur-es es)]
+
+    [`(def ((ref ,fx) ,params ...) ,anns ... ,body ,more)
+     (set-union (get-references body) (get-references more))]
+
+    [`(fn (,(or `(ref ,params) `(|...| (ref ,params))) ...) ,anns ,body)
+     (get-references body)]
+
+    [`(ref ,x)
+      (set (var-name x))]
+
+    [(or `(extern-ref ,x) `(fallback-ref ,x))
+      (set x)]
+
+    [`((blessed-prim ,x) ,es ...)
+      (recur-es es)]
+
+    ;; Untagged application
+    [`(,ef ,es ...)
+     (recur-es (cons ef es))]))
+
+;; Expr [HashOf Var Var] [Bool] -> Expr
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
-(define (insert-ast-annotations ast [env (hash)])
+(define (insert-ast-annotations ast [env (hash)] [under-blessed? #f])
   (define (recur ast)
-    (insert-ast-annotations ast env))
+    (insert-ast-annotations ast env under-blessed?))
   
   (match ast
     [`(const ,c) `(const ,c)]
 
-    [`(bless ,e0) `(bless ,e0)]
+    [`(bless ,e0)
+      `(bless ,(insert-ast-annotations e0 env #t))]
 
     [`(if ,g ,t ,e)
      `(if ,(recur g) ,(recur t) ,(recur e))]
@@ -488,7 +643,7 @@
       (define new-x (new-variable x))
       (define env-body (hash-set env x new-x))
 
-      `(let (ref ,new-x) ,(recur rhs) ,(insert-ast-annotations body env-body))]
+      `(let (ref ,new-x) ,(recur rhs) ,(insert-ast-annotations body env-body under-blessed?))]
 
     [`(|[]| ,es ...)
      `(|[]| ,@(map recur es))]
@@ -504,12 +659,15 @@
                    ([param params])
           
           (define new-param (apply-to-ref-sym param new-variable))
-          (values (hash-set body-env param new-param)
+          (values (hash-set body-env (remove-param-ref param) (remove-param-ref new-param))
                   (cons new-param new-params))))
 
      `(def ((ref ,fx-var) ,@new-params) ,@anns
-           ,(insert-ast-annotations body body-env)
-           ,(insert-ast-annotations more more-env))]
+           ,(insert-ast-annotations body body-env under-blessed?)
+           ,(insert-ast-annotations more more-env under-blessed?))]
+
+    [`((ref ,blessed-fx) ,es ...) #:when under-blessed?
+      `((blessed-prim ,blessed-fx) ,@(map recur es))]
 
     ;; TODO: we may want to handle true and false differently in the rest of the compiler (since
     ;; treating them as refs means they can be shadowed by user code).
@@ -541,7 +699,7 @@
 
     [`(const ,c) `(const ,c)]
 
-    [`(bless ,e0) `(bless ,e0)]
+    [`(bless ,e0) `(bless ,(recur e0))]
     
     [`(seq ,e1 ,e2)
       (define seq-x (gensym 'seq))
@@ -585,6 +743,9 @@
      `(fallback-ref ,x)]
 
     [`(extern-ref ,x)
+     `(ref ,x)]
+
+    [`(blessed-prim ,x)
      `(ref ,x)]
 
     ;; Untagged application

@@ -8,12 +8,14 @@
          get-fail-chains
          add-ref
          remove-ref
+         remove-param-ref
          get-annotation
          set-annotation
          remove-annotation
          remove-annotation-on-def
          annotation-exists-on-def?
-         annotation-exists?)
+         annotation-exists?
+         transitive-closure)
 
 
 ;; Symbol -> Ref
@@ -23,6 +25,12 @@
 (define (remove-ref ref)
   (match ref
     [`(ref ,x) x]))
+
+;; Expr -> Symbol
+(define (remove-param-ref ref)
+  (match ref
+    [`(ref ,x) x]
+    [`(|...| (ref ,x)) x]))
 
 ;; Expr -> (ValuesOf (ListOf Expr) Expr)
 ;; Split the nested sibling defs into a list of seperate defs (and a final rest-ast).
@@ -170,6 +178,25 @@
                         [`(,(== annotation-name) _ ...) #t]
                         [_ #f]))
     #t))
+
+;; (HashOf Symbol (SetOf Symbol)) -> (HashOf Symbol (SetOf Symbol))
+;; A naive implementation of finding the transitive closure of a graph.
+(define (transitive-closure graph)
+  (define (fixpoint graph previous)
+    (if (equal? graph previous)
+        graph
+        (fixpoint (reachable-step graph) graph)))
+
+  (fixpoint graph (hash)))
+
+(define (reachable-step graph)
+  (for/hash ([(h reachable-set) (in-hash graph)])
+    (define reachable-set+
+      (foldl set-union reachable-set
+        (for/list ([n (in-set reachable-set)])
+          (hash-ref graph n))))
+
+    (values h reachable-set+)))
 
 
 (module+ test
