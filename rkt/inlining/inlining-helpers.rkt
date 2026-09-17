@@ -1,6 +1,8 @@
 #lang racket
 
-(provide set-effort-bound!
+(provide get-effort-bound
+         get-size-bound
+         set-effort-bound!
          set-size-bound!
 
          effect-context?
@@ -13,10 +15,13 @@
          try-optimize
 
          (struct-out environment)
+         make-empty-env
          env-has?
          env-ref
          extend-env
          extend-env-circular
+         get-env-under-blessed?
+         set-env-under-blessed
          get-env-effort
          set-env-effort!
          inc-env-effort!
@@ -45,9 +50,11 @@
          apply-to-ref-sym)
 
 ;; Parameters
-(define effort-bound 50)
+(define effort-bound 200)
 (define size-bound 30)
 
+(define (get-effort-bound) effort-bound)
+(define (get-size-bound) size-bound)
 (define (set-effort-bound! v) (set! effort-bound v))
 (define (set-size-bound! v) (set! size-bound v))
 
@@ -56,7 +63,8 @@
    effort-counter   ;; (or #f (BoxOf Integer))
    size-total       ;; (or #f (BoxOf Integer))
    size-delta       ;; (or #f (BoxOf Integer))
-   abort-kont]      ;; (or #f Continuation)
+   abort-kont       ;; (or #f Continuation)
+   under-blessed?]  ;; Bool
   #:transparent)
 
 ;; env can be circular (which is why it's a Box).
@@ -100,7 +108,8 @@
               (box 0) ;; Start effort counter
               #f      ;; Do not start total size counter
               (box 0) ;; Start delta size counter
-              kont)))))
+              kont
+              (environment-under-blessed? env))))))
 
 ;; A helper to try optimizing (this will start the counters) or otherwise fail.
 (define (try-optimize env do-try do-fail)
@@ -110,6 +119,9 @@
   (if tried-value
       tried-value
       (do-fail)))
+
+(define (make-empty-env)
+  (environment (hash) #f #f #f #f #f))
 
 (define (env-has? env x)
   (hash-has-key? (environment-bindings env) (var-name x)))
@@ -129,7 +141,8 @@
     (environment-effort-counter env)
     (environment-size-total env)
     (environment-size-delta env)
-    (environment-abort-kont env)))
+    (environment-abort-kont env)
+    (environment-under-blessed? env)))
 
 (define (extend-env-circular env xs xs^)
   (define bindings
@@ -144,7 +157,8 @@
       (environment-effort-counter env)
       (environment-size-total env)
       (environment-size-delta env)
-      (environment-abort-kont env)))
+      (environment-abort-kont env)
+      (environment-under-blessed? env)))
 
   ;; Make the environment circular
   (for ([x^ xs^])
@@ -157,9 +171,22 @@
         (environment-effort-counter env)
         (environment-size-total x^-env)
         (environment-size-delta env)
-        (environment-abort-kont env))))
+        (environment-abort-kont env)
+        (environment-under-blessed? env))))
 
   env^)
+
+(define (get-env-under-blessed? env)
+  (environment-under-blessed? env))
+
+(define (set-env-under-blessed env under-blessed?)
+  (environment
+    (environment-bindings env)
+    (environment-effort-counter env)
+    (environment-size-total env)
+    (environment-size-delta env)
+    (environment-abort-kont env)
+    under-blessed?))
 
 (define (get-env-effort env)
   (if (environment-effort-counter env)
@@ -232,7 +259,8 @@
                         (environment-effort-counter env)
                         (box 0) ;; Different total size counter for each operand
                         (environment-size-delta env)
-                        (environment-abort-kont env)))
+                        (environment-abort-kont env)
+                        (environment-under-blessed? env)))
 
   (opnd expr (box env^) (box #f)))
 

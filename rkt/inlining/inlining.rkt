@@ -1,6 +1,7 @@
 #lang racket
 
 (require "inlining-helpers.rkt"
+         "bless-primitives.rkt"
          "../helpers.rkt")
 
 (provide inlining-pass)
@@ -30,13 +31,20 @@
           (optimize/ast
             (insert-ast-annotations body)
             'value
-            (environment (hash) #f #f #f #f))))
-      
+            (make-empty-env))))
+
       `(def (,@xs) ,@anns ,new-body)]
     [_ (error 'optimize/def "Unexpected AST: ~a" def-ast)]))
 
 ;; Expr Environment -> Expr
 (define (optimize/ast ast context env)
+  (define effort (get-env-effort env))
+  (when effort
+    (if (< effort (get-effort-bound))
+        (inc-env-effort! env)
+        (begin
+          (displayln (format "ABORTING INLINING ATTEMPT: effort = ~a" effort))
+          (abort-inlining-attempt env))))
 
   (match ast
     [`(const ,c)
@@ -53,7 +61,17 @@
         [else `(const ,c)])]
 
     [`(bless ,e0)
-     `(bless ,(optimize/ast e0 context env))]
+     (cond
+      [(effect-context? context) '(const void)]
+      [(test-context? context)
+        (define e0^ (optimize/ast e0 context (set-env-under-blessed env #t)))
+
+        (match e0^
+          ['(const false) '(const false)]
+          [`(const ,c) '(const true)]
+          [else `(bless ,e0^)])]
+      [else
+        `(bless ,(optimize/ast e0 context (set-env-under-blessed env #t)))])]
 
     ;; Evalutate e1 for its effect, then evaluate e2 for the current context
     [`(seq ,e1 ,e2)
@@ -99,11 +117,26 @@
             [(_ _)
               `(if ,g^ ,e1^ ,e2^)])])]
 
+    ;; TODO:
     [`(continue-dispatch ,es ...)
      (inc-size-total! env)
      `(continue-dispatch ,@es)]
     
     ;; TODO:
+    [`(fail (ref ,fx) ,es ...)
+     (define opt-fail (optimize/ast `((ref ,fx) ,@es) 'value env))
+
+     (inc-size-total! env)
+     
+     (match opt-fail
+      [`((ref ,fx^) ,es^ ...) #:when (equal? (var-name fx) (var-name fx^))
+       ;; TODO: Make sure to handle the case where this call to fx has different es than the original call to fx (which might be possible
+       ;;   when inlining a recursive call?). This should be handled when deciding whether to residualize a (fail) or regular application.
+       `(fail (ref ,fx^) ,@es^)]
+      
+      [_
+        opt-fail])]
+
     [`(fail)
      (inc-size-total! env)
      `(fail)]
@@ -199,49 +232,42 @@
     [`(ref ,x)
       (match-define (var x-sym x-op x-flags x-source-flags) x)
 
+      (define x^ (env-ref env x))
+      (match-define (var x^-sym op x^-flags x^-source-flags) x^)
+
       (cond
-        [(not (env-has? env x))
-          ;; TODO: this case should not be needed
-          (set-add! x-flags 'ref)
-          `(ref ,x)]
+        ;; If in an effect context, then we don't care about the reference
+        [(equal? context 'effect)
+          (inc-size-total! env)
+          '(const void)]
+
+        ;; If x^ is not bound to an operand then we can't inline/propogate it.
+        [(null? op)
+          ;; Mark it as a ref if it wasn't already.
+          (set-add! x^-flags 'ref)
+
+          (inc-size-total! env)
+          `(ref ,x^)]
+
+        ;; Otherwise, we can try to copy/propogate the value of x^ into the reference site.
         [else
-          (define x^ (env-ref env x))
-          (match-define (var x^-sym op x^-flags x^-source-flags) x^)
+          ;; Get the operand expression and then try to copy it to the reference site.
+          (define op-e (visit-op op 'value))
 
-          (cond
-            ;; If in an effect context, then we don't care about the reference
-            [(equal? context 'effect)
-              (inc-size-total! env)
-              '(const void)]
+          (define op-size (get-env-size-total (unbox (opnd-env op))))
 
-            ;; If x^ is not bound to an operand then we can't inline/propogate it.
-            [(null? op)
-              ;; Mark it as a ref if it wasn't already.
-              (set-add! x^-flags 'ref)
+          ;; Note: this is overly conservative. We should be able to copy
+          ;;   things like constants and immutable references for free.
+          ;;   Also, for lambdas, if they get folded after propogation, then
+          ;;   we should take the resulting size into account.
+          (if (set-member? x^-flags 'copied)
+              (accumulate-size-delta! env op-size)
+              
+              ;; Hasn't been copied before, so mark it as copied and there is no need to accumulate
+              ;; the size delta for the first copy.
+              (set-add! x^-flags 'copied))
 
-              (inc-size-total! env)
-
-              `(ref ,x^)]
-
-            ;; Otherwise, we can try to copy/propogate the value of x^ into the reference site.
-            [else
-              ;; Get the operand expression and then try to copy it to the reference site.
-              (define op-e (visit-op op 'value))
-
-              (define op-size (get-env-size-total (unbox (opnd-env op))))
-
-              ;; Note: this is overly conservative. We should be able to copy
-              ;;   things like constants and immutable references for free.
-              ;;   Also, for lambdas, if they get folded after propogation, then
-              ;;   we should take the resulting size into account.
-              (if (set-member? x^-flags 'copied)
-                  (accumulate-size-delta! env op-size)
-                  
-                  ;; Hasn't been copied before, so mark it as copied and there is no need to accumulate
-                  ;; the size delta for the first copy.
-                  (set-add! x^-flags 'copied))
-
-              (copy x^ (result op-e) context env)])])]
+          (copy x^ (result op-e) context env)])]
 
     [(or `(extern-ref ,x) `(fallback-ref ,x))
      (inc-size-total! env)
@@ -250,13 +276,28 @@
         [(effect-context? context) '(const void)]
         [else ast])]
 
-    [`((blessed-prim ,x) ,es ...)
-      (define es^ (map (lambda (e) (optimize/ast e 'value env)) es))
+    [`(blessed-prim ,x)
+      (cond
+        ;; Application context, so try to apply the primitive.
+        [(app-context? context)
+          (match-define (app-context ops outer-context inlined?) context)
+          (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+          (match (map result op-es)
+            ;; All the args are constant, so just apply the primitive.
+            [(list `(const ,cs) ...) #:when (hash-has-key? bless-primitives x)
+              (define p-fun (hash-ref bless-primitives x))
+              (define new-c (apply p-fun cs)) ;; TODO: Should probably check for arity errors here
+              (set-box! inlined? #t)
+              (inc-size-total! env)
+              `(const ,new-c)]
 
-      (inc-size-total! env)
-
-      ;; TODO: try to reduce
-      `((blessed-prim ,x) ,@es^)]
+            ;; Otherwise, just leave the primitive application alone.
+            [_
+              (inc-size-total! env)
+              `(blessed-prim ,x)])]
+        
+        [else
+          (error 'inlining "blessed-prim should only occur in an application context: ~a" ast)])]
 
     ;; Untagged application
     [`(,ef ,es ...)
@@ -314,7 +355,7 @@
         (set! fx-ops (construct-operands fn-vals more-env))
 
         (optimize/ast more (replace-app-context context 'value) more-env))))
-  
+
   (define fx-op-es (map (lambda (op) (visit-op op 'value)) fx-ops))
 
   ;; --- Prune unreferenced fx's
@@ -401,7 +442,14 @@
 
     ;; Small enough bless
     [(and (equal? e-tag 'bless) (small-bless? e))
-      (optimize/ast e context env)]
+      (if (get-env-under-blessed? env)
+          ;; Already under a bless, so just propogate the inner expression
+          (match e
+            [`(bless ,e0)
+             (optimize/ast e0 context env)])
+          
+          ;; Not under a bless, so propogate the bless tag
+          (optimize/ast e context env))]
 
     [is-good?
       (optimize/ast e context env)]
@@ -579,6 +627,9 @@
     [`(continue-dispatch ,es ...)
       (recur-es es)]
     
+    [`(fail ,fx ,es ...)
+      (recur-es (cons fx es))]
+
     ;; TODO:
     [`(fail) (set)]
 
@@ -613,17 +664,19 @@
     [`(,ef ,es ...)
      (recur-es (cons ef es))]))
 
-;; Expr [HashOf Var Var] [Bool] -> Expr
+;; Expr [HashOf Var Var] [Bool] [(or Expr #f)] -> Expr
 ;; Add extra data to the AST for optimization purposes (e.g. variable locations, flags, etc.).
-(define (insert-ast-annotations ast [env (hash)] [under-blessed? #f])
+(define (insert-ast-annotations ast [env (hash)] [under-blessed? #f] [fail-expr #f])
   (define (recur ast)
-    (insert-ast-annotations ast env under-blessed?))
-  
+    (insert-ast-annotations ast env under-blessed? fail-expr))
+  (define (recur-with-env ast env)
+    (insert-ast-annotations ast env under-blessed? fail-expr))
+
   (match ast
     [`(const ,c) `(const ,c)]
 
     [`(bless ,e0)
-      `(bless ,(insert-ast-annotations e0 env #t))]
+      `(bless ,(insert-ast-annotations e0 env #t fail-expr))]
 
     [`(if ,g ,t ,e)
      `(if ,(recur g) ,(recur t) ,(recur e))]
@@ -631,7 +684,10 @@
     [`(continue-dispatch ,es ...)
      `(continue-dispatch ,@(map recur es))]
     
-    [`(fail) `(fail)]
+    [`(fail)
+     (if fail-expr
+         fail-expr
+         `(fail))]
 
     [`(,ell ,e0) #:when (eq? ell '|...|)
      `(,ell ,(recur e0))]
@@ -643,28 +699,52 @@
       (define new-x (new-variable x))
       (define env-body (hash-set env x new-x))
 
-      `(let (ref ,new-x) ,(recur rhs) ,(insert-ast-annotations body env-body under-blessed?))]
+      `(let (ref ,new-x) ,(recur rhs) ,(recur-with-env body env-body))]
 
     [`(|[]| ,es ...)
      `(|[]| ,@(map recur es))]
 
     ;; Inner def
     [`(def ((ref ,fx) ,params ...) ,anns ... ,body ,more)
-     (define fx-var (new-variable fx))
-     (define more-env (hash-set env fx fx-var))
+     (define-values (defs rest-ast) (get-nested-sibling-defs ast))
 
-     (define-values (body-env new-params)
-        (for/foldr ([body-env more-env]
-                    [new-params (list)])
-                   ([param params])
+     (define-values (fx-vars rest-ast-env)
+      (for/fold ([fx-vars (list)]
+                 [env^ env])
+                ([def defs])
+        (match-define `(def ((ref ,fx) ,params ...) ,anns ... ,body) def)
+        (define fx-var (new-variable fx))
+
+        (values
+          (append fx-vars (list fx-var))
+          (hash-set env^ fx fx-var))))
+
+     (define defs^
+      (for/list ([def defs]
+                 [fx-var fx-vars])
+        (match-define `(def ((ref ,fx) ,params ...) ,anns ... ,body) def)
+        
+        (define-values (body-env new-params)
+          (for/foldr ([body-env rest-ast-env]
+                      [new-params (list)])
+                    ([param params])
+            
+            (define new-param (apply-to-ref-sym param new-variable))
+            (values (hash-set body-env (remove-param-ref param) (remove-param-ref new-param))
+                    (cons new-param new-params))))
+
+        (define maybe-fail-expr
+          (let* ([maybe-fail-to (get-annotation anns 'fail_to)]
+                 [maybe-fail-to-x (if maybe-fail-to (second (car maybe-fail-to)) #f)]
+                 [maybe-fail-to-var (hash-ref rest-ast-env maybe-fail-to-x #f)])
+            (if maybe-fail-to-var
+              `(fail (ref ,maybe-fail-to-var) ,@new-params)
+              #f)))
           
-          (define new-param (apply-to-ref-sym param new-variable))
-          (values (hash-set body-env (remove-param-ref param) (remove-param-ref new-param))
-                  (cons new-param new-params))))
-
-     `(def ((ref ,fx-var) ,@new-params) ,@anns
-           ,(insert-ast-annotations body body-env under-blessed?)
-           ,(insert-ast-annotations more more-env under-blessed?))]
+        `(def ((ref ,fx-var) ,@new-params) ,@anns
+          ,(insert-ast-annotations body body-env under-blessed? maybe-fail-expr))))
+    
+     (nest-sibling-defs defs^ (insert-ast-annotations rest-ast rest-ast-env under-blessed? fail-expr))]
 
     [`((ref ,blessed-fx) ,es ...) #:when under-blessed?
       `((blessed-prim ,blessed-fx) ,@(map recur es))]
@@ -712,7 +792,12 @@
     [`(continue-dispatch ,es ...)
      `(continue-dispatch ,@(map recur es))]
     
-    [`(fail) `(fail)]
+    ;; TODO:
+    [`(fail ,fx ,es ...)
+     `(fail)]
+
+    [`(fail)
+     `(fail)]
 
     [`(,ell ,e0) #:when (eq? ell '|...|)
      `(,ell ,(recur e0))]

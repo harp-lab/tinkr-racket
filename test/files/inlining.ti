@@ -6,6 +6,7 @@ def (main)
 
   let a (do_add 5)
   let b 6
-  let f (lambda (x) (+ x 1))
-  (debug_print (write (f (+ a b))))
+  ;;let f (lambda (x) (+ x 1))
+  ;;(debug_print (write (f (+ a b))))
+  (debug_print (write (+ a b)))
 }
