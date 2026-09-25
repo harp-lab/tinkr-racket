@@ -26,7 +26,8 @@
 	 build-clang!
 	 build-cpp!
 	 pad-params
-	 pad-args)
+	 pad-args
+   all-but-last)
 
 
 (define std-entry-path "std/base.ti")
@@ -300,3 +301,9 @@
   (if (>= sofar bless-arg-count)
       '()
       (cons `(ref ,(gensymb '_)) (pad-params (add1 sofar)))))
+
+(define (all-but-last lst)
+  (match lst
+    ['() '()]
+    [(list a) '()]
+    [(cons a b) (cons a (all-but-last b))]))

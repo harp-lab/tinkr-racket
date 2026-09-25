@@ -286,7 +286,7 @@
         (define update-accs
           (for/list ([pv pvs]
                      [pv^ pvs^])
-            `((ref +) (ref ,pv) (|[]| (ref ,pv^)))))
+            `((ref _slice_concat) (ref ,pv) (|[]| (ref ,pv^)))))
         
         (define desugared-update-accs (map desugar-ast update-accs))
 
@@ -647,7 +647,7 @@
        (match chunks
         [`() `(ref empty)] 
         [`(,e0 ,es ...)
-          (foldl (lambda (e1 e0) `((ref +) (ref none) (bless (const 2)) ,e0 ,e1)) e0 es)])]
+          (foldl (lambda (e1 e0) `((ref _slice_concat) (ref none) (bless (const 2)) ,e0 ,e1)) e0 es)])]
 
       [`((ref |{}|)) '(ref none)]
       [`((ref |{}|) ,es ... ,elast)

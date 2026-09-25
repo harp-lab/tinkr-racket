@@ -2,7 +2,9 @@
 
 (require "inlining-helpers.rkt"
          "bless-primitives.rkt"
-         "../helpers.rkt")
+         "primitives.rkt"
+         "../helpers.rkt"
+         "../utils/utils.rkt")
 
 (provide inlining-pass)
 
@@ -26,12 +28,17 @@
 (define (optimize/def def-ast)
   (match def-ast
     [`(def (,xs ...) ,anns ... ,body)
+      (define body^ (insert-ast-annotations body))
+
+      (define opt-body
+        (optimize/ast
+            body^
+            'value
+            (make-empty-env)))
+
       (define new-body
         (strip-ast-annotations 
-          (optimize/ast
-            (insert-ast-annotations body)
-            'value
-            (make-empty-env))))
+          opt-body))
 
       `(def (,@xs) ,@anns ,new-body)]
     [_ (error 'optimize/def "Unexpected AST: ~a" def-ast)]))
@@ -62,7 +69,7 @@
 
     [`(bless ,e0)
      (cond
-      [(effect-context? context) '(const void)]
+      [(effect-context? context) (inc-size-total! env) '(const void)]
       [(test-context? context)
         (define e0^ (optimize/ast e0 context (set-env-under-blessed env #t)))
 
@@ -121,10 +128,22 @@
     [`(continue-dispatch ,es ...)
      (inc-size-total! env)
      `(continue-dispatch ,@es)]
-    
+
     ;; TODO:
     [`(fail (ref ,fx) ,es ...)
-     (define opt-fail (optimize/ast `((ref ,fx) ,@es) 'value env))
+     (define fail-app
+      (if (param-list-is-variadic? es)
+          (let ([first-es (all-but-last es)]
+                [last-e (last es)])
+            (match-define `(|...| ,last-e-ref) last-e)
+            (define arg-list
+              `((prim-ref _slice_concat) (const void) (bless (const 2)) (|[]| ,@first-es) ,last-e-ref))
+            
+            `((prim-ref _apply) (const void) (bless (const 2)) (ref ,fx) ,arg-list))
+          
+          `((ref ,fx) ,@es)))
+
+     (define opt-fail (optimize/ast fail-app 'value env))
 
      (inc-size-total! env)
      
@@ -153,7 +172,7 @@
 
     ;; Simple reference propogation
     [`(let (ref ,x) (ref ,y) ,body)
-      (define eb-env (extend-env env (list x) (list (env-ref env y))))
+      (define eb-env (extend-env env (list x) (list (resolve-ref env y))))
       (optimize/ast body context eb-env)]
 
     ;; General let case
@@ -174,7 +193,7 @@
           (optimize/ast body (replace-app-context context 'value) eb-env))))
      
      (match-define (var x-sym _ flags source-flags) x^)
-     (define x-is-ref (set-member? flags 'ref))
+     (define x-is-ref (not (= 0 (hash-ref flags 'ref 0))))
 
      (define op-e
       (cond
@@ -186,7 +205,7 @@
           (visit-op op 'value)]))
 
      (inc-size-total! env)
-     (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op))))
+     (accumulate-size-total! env (get-op-size-total op))
 
      ;; We can remove the let binding if x is not referenced in the body
      (if (not x-is-ref)
@@ -196,7 +215,10 @@
     ;; TODO:
     [`(|[]| ,es ...)
      (inc-size-total! env)
-     `(|[]| ,@(map (lambda (e) (optimize/ast e 'value env)) es))]
+     (define e^
+     `(|[]| ,@(map (lambda (e)
+                      (optimize/ast e 'value env)) es)))
+      e^]
 
     ;; Inner def
     [`(def ((ref ,fx) ,params ...) ,anns ... ,body ,more)
@@ -217,7 +239,17 @@
 
           (inc-size-total! env)
 
-          (define new-fn `(fn (,@(map add-ref params^)) ,anns ,body^))
+          (define (make-last-variadic-with-refs params)
+            (match params
+              [`(,param) (list `(|...| (ref ,param)))]
+              [`(,param ,xs ...) (append (list (add-ref param)) (make-last-variadic-with-refs xs))]))
+
+          (define ref-params^
+            (if (fn-is-variadic? ast)
+                (make-last-variadic-with-refs params^)
+                (map add-ref params^)))
+
+          (define new-fn `(fn (,@ref-params^) ,anns ,body^))
 
           (fn-rename-annotations new-fn env)]
 
@@ -229,10 +261,43 @@
               app-result
               (optimize/ast ast 'value env))])]
 
+    ;; TODO:
+    [`(prim-ref ,x)
+      (cond
+        [(test-context? context) (inc-size-total! env) '(const true)]
+        [(effect-context? context) (inc-size-total! env) '(const void)]
+        [(value-context? context) (inc-size-total! env) `(prim-ref ,x)]
+
+        ;; Application context, so try to apply the primitive.
+        [(app-context? context)
+          (match-define (app-context ops outer-context inlined?) context)
+          (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+          (define es (map result op-es))
+          (define (prim-app-fail)
+            (inc-size-total! env)
+            `(prim-ref ,x))
+
+          (cond
+            [(hash-has-key? primitives x)
+              (define p-fun (hash-ref primitives x))
+              (define result (apply p-fun es)) ;; TODO: Should probably check for arity errors here
+
+              (if result
+                  ;; The returned result may be reducible
+                  (let ([opt-result (optimize/ast result 'value env)])
+                    (set-box! inlined? #t)
+                    opt-result)
+                  
+                  (prim-app-fail))]
+            [else (prim-app-fail)])]
+        
+        [else
+          (error 'inlining "Invalid context.")])]
+
     [`(ref ,x)
       (match-define (var x-sym x-op x-flags x-source-flags) x)
 
-      (define x^ (env-ref env x))
+      (define x^ (resolve-ref env x))
       (match-define (var x^-sym op x^-flags x^-source-flags) x^)
 
       (cond
@@ -242,10 +307,8 @@
           '(const void)]
 
         ;; If x^ is not bound to an operand then we can't inline/propogate it.
-        [(null? op)
-          ;; Mark it as a ref if it wasn't already.
-          (set-add! x^-flags 'ref)
-
+        [(not op)
+          (inc-flag! x^-flags 'ref)
           (inc-size-total! env)
           `(ref ,x^)]
 
@@ -254,18 +317,18 @@
           ;; Get the operand expression and then try to copy it to the reference site.
           (define op-e (visit-op op 'value))
 
-          (define op-size (get-env-size-total (unbox (opnd-env op))))
+          (define op-size (get-op-size-total op))
 
           ;; Note: this is overly conservative. We should be able to copy
           ;;   things like constants and immutable references for free.
           ;;   Also, for lambdas, if they get folded after propogation, then
           ;;   we should take the resulting size into account.
-          (if (set-member? x^-flags 'copied)
+          (if (hash-has-key? x^-flags 'copied)
               (accumulate-size-delta! env op-size)
               
               ;; Hasn't been copied before, so mark it as copied and there is no need to accumulate
               ;; the size delta for the first copy.
-              (set-add! x^-flags 'copied))
+              (hash-set! x^-flags 'copied #t))
 
           (copy x^ (result op-e) context env)])]
 
@@ -285,11 +348,14 @@
           (match (map result op-es)
             ;; All the args are constant, so just apply the primitive.
             [(list `(const ,cs) ...) #:when (hash-has-key? bless-primitives x)
+              (define const-cs (map (lambda (c) `(const ,c)) cs))
+
               (define p-fun (hash-ref bless-primitives x))
-              (define new-c (apply p-fun cs)) ;; TODO: Should probably check for arity errors here
+              (define new-c (apply p-fun const-cs)) ;; TODO: Should probably check for arity errors here
               (set-box! inlined? #t)
               (inc-size-total! env)
-              `(const ,new-c)]
+
+              new-c]
 
             ;; Otherwise, just leave the primitive application alone.
             [_
@@ -320,7 +386,7 @@
 
         (inc-size-total! env)
         (for ([op ops])
-          (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
+          (accumulate-size-total! env (get-op-size-total op)))
 
         `(,ef^ ,@op-es)])]))
 
@@ -368,7 +434,7 @@
     (for/hash ([expr (cons more^ fx-op-es)]
                [node (cons more-symb fx-symbs)])
       (define refs (get-references expr))
-      (define sibling-refs (filter (lambda (gx) (member gx fx-symbs)) (set->list refs)))
+      (define sibling-refs (list->set (filter (lambda (gx) (member gx fx-symbs)) (set->list refs))))
 
       (values node sibling-refs)))
 
@@ -392,7 +458,7 @@
   (inc-size-total! env)
   ;; TODO: take the pruning into account:
   (for ([op (in-list fx-ops)])
-    (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
+    (accumulate-size-total! env (get-op-size-total op)))
 
   ;; Reconstruct newly optimized defs
   (define defs^
@@ -404,22 +470,40 @@
   
   (nest-sibling-defs defs^ more^))
 
-;; Opnd Context -> Expr
+;; Environment Var -> Var
+;; Resolves a var reference site to its current binding.
+;;
+;; Normally x is an unresolved reference and must be present in env under its
+;; original (pre-rename) name. (This can happen when re-optimizing an AST containing
+;; free variables which have already been renamed).
+(define (resolve-ref env x)
+  (cond
+    [(env-has? env x) (env-ref env x)]
+    [(var-op x) x]
+    [else (env-ref env x)])) ;; not found and not already-resolved: let env-ref raise its error
+
+;; BoundOpnd Context -> Expr
 ;; Residualize an operand/argument expression (if it has already been visited,
 ;; it will use the cached version)
-(define (visit-op op context)
-  (match-define (opnd e (box env) cache) op)
-  (define c (unbox cache))
+(define (visit-op bound-op context)
+  (match bound-op
+    ;; Singular operand
+    [(opnd e (box env) cache)
+      (define c (unbox cache))
 
-  (cond
-    ;; We have already processed the operand, so just use the cached version.
-    [c c]
+      (cond
+        ;; We have already processed the operand, so just use the cached version.
+        [c c]
 
-    ;; We need to process the operand expression for the first time (cache is #f).
-    [else
-      (define e^ (optimize/ast e context env))
-      (set-box! cache e^)
-      e^]))
+        ;; We need to process the operand expression for the first time (cache is #f).
+        [else
+          (define e^ (optimize/ast e context env))
+          (set-box! cache e^)
+          e^])]
+    
+    ;; Variadic operand
+    [(list ops ...)
+      `(|[]| ,@(map (lambda (op) (visit-op op context)) ops))]))
 
 ;; Var Expr Context Environment -> Expr
 ;; Handles copy propogation and inlining at a variable reference site.
@@ -465,7 +549,7 @@
           app-result
 
           (begin
-            (set-add! flags 'ref)
+            (inc-flag! flags 'ref)
             `(ref ,x)))]
 
     ;; Truthy values in a test context can be replaced with (const true)
@@ -477,9 +561,9 @@
     [(equal? e-tag 'extern-ref)
       e]
 
-    ;; Otherwise, just leave the reference alone (mark it as a reference if needed).
+    ;; Otherwise, just leave the reference alone and inc ref count.
     [else
-      (set-add! flags 'ref)
+      (inc-flag! flags 'ref)
       `(ref ,x)]))
 
 ;; `(fn ...) AppContext Environment -> (or Expr #f)
@@ -496,9 +580,26 @@
 ;; `(fn ...) AppContext Environment -> (or Expr #f)
 (define (apply-fn expr context env)
   (match-define (app-context ops outer-context inlined?) context)
-  (match-define `(fn ((ref ,params) ...) ,annotations ,body) expr)
+  (match-define `(fn ((ref ,first-params) ...
+                      ,(or `(|...| (ref ,last-param))
+                           `(ref ,last-param))) ,annotations ,body) expr)
 
-  (define params^ (map (lambda (p^ op) (variable-set-op p^ op)) (copy-variables params) ops))
+  (define first-params^ (map (lambda (p^ op) (variable-set-op p^ op)) (copy-variables first-params) (take ops (length first-params))))
+  (define last-ops (drop ops (length first-params)))
+
+  (when (and (not (fn-is-variadic? expr)) (not (= (length last-ops) 1)))
+    (error 'inlining "There is a function application with the wrong number of arguments.")) ;; TODO: handle this better?
+
+  (define last-params^
+    (if (fn-is-variadic? expr)
+        (list (variable-set-op (copy-variable last-param) last-ops))
+        (list (variable-set-op (copy-variable last-param) (first last-ops)))))
+
+  (define last-params (list last-param))
+
+  (define params (append first-params last-params))
+  (define params^ (append first-params^ last-params^))
+
   (define body-env (extend-env env params params^))
 
   ;; This may propogate operands into the body
@@ -509,8 +610,7 @@
     (for/list ([p params^])
       (match-define (var p-sym p-op p-flags p-source-flags) p)
 
-      (define p-is-ref (set-member? p-flags 'ref))
-      (define p-is-assign (set-member? p-flags 'assign))
+      (define p-is-ref (not (= (hash-ref p-flags 'ref 0) 0)))
 
       (cond
         ;; There are no more references to the parameter. So, this
@@ -530,7 +630,7 @@
 
         (inc-size-total! env)
         (for ([op ops])
-          (accumulate-size-total! env (get-env-size-total (unbox (opnd-env op)))))
+          (accumulate-size-total! env (get-op-size-total op)))
 
         (apply make-seq (append op-es (list body^))))
       
@@ -581,11 +681,6 @@
     [`(extern-ref ,_) #t]
     [`(fallback-ref ,_) #t]
     [_ (displayln 'TODO-extend-truthy?) #f]))
-
-(define (small-bless? expr)
-  (match expr
-    [`(bless (const ,c)) #t]
-    [_ #f]))
 
 (define (fn-rename-annotations fn env)
   (match-define `(fn ,params ,annotations ,body) fn)
@@ -650,6 +745,9 @@
 
     [`(fn (,(or `(ref ,params) `(|...| (ref ,params))) ...) ,anns ,body)
      (get-references body)]
+
+    [`(prim-ref ,x)
+      (set x)]
 
     [`(ref ,x)
       (set (var-name x))]
@@ -724,10 +822,16 @@
                  [fx-var fx-vars])
         (match-define `(def ((ref ,fx) ,params ...) ,anns ... ,body) def)
         
+        ;; Add pad_params if needed
+        (define variadic-params
+          (if (param-list-is-variadic? params)
+              params
+              (append params (list `(|...| (ref ,(gensym 'pad_params)))))))
+
         (define-values (body-env new-params)
           (for/foldr ([body-env rest-ast-env]
                       [new-params (list)])
-                    ([param params])
+                    ([param variadic-params])
             
             (define new-param (apply-to-ref-sym param new-variable))
             (values (hash-set body-env (remove-param-ref param) (remove-param-ref new-param))
@@ -748,6 +852,9 @@
 
     [`((ref ,blessed-fx) ,es ...) #:when under-blessed?
       `((blessed-prim ,blessed-fx) ,@(map recur es))]
+
+    [`(ref ,x) #:when (set-member? (hash-keys primitives) x)
+      `(prim-ref ,x)]
 
     ;; TODO: we may want to handle true and false differently in the rest of the compiler (since
     ;; treating them as refs means they can be shadowed by user code).
@@ -775,7 +882,7 @@
   (match ast
     [`(const true) `(ref true)]
     [`(const false) `(ref false)]
-    [`(const void) `(const 0)]
+    [`(const void) `(ref none)]
 
     [`(const ,c) `(const ,c)]
 
@@ -833,6 +940,32 @@
     [`(blessed-prim ,x)
      `(ref ,x)]
 
+    [`(prim-ref ,x)
+     `(ref ,x)]
+
     ;; Untagged application
     [`(,fe ,es ...)
      `(,(recur fe) ,@(map recur es))]))
+
+
+(module+ test
+  (require rackunit)
+
+  (define test-p1
+    `(def ((ref main)) ()
+      (def ((ref fx) (ref a)) ()
+          (ref a)
+      ((ref fx) (bless (const 5))))))
+  
+  ;; TODO: failing test case
+  (check-equal? (optimize/def (optimize/def test-p1))
+                '(def ((ref main)) () (bless (const 5))))
+
+  (define (test-size-count op-e)
+    (define op-test
+      (opnd (insert-ast-annotations op-e) (box (environment (hash) #f (box 0) #f #f #f)) (box #f)))
+    (visit-op op-test 'value)
+    (get-op-size-total op-test))
+
+  (check-equal? (test-size-count '(bless (const 5))) 1)
+  (check-equal? (test-size-count '((ref +) (bless (const 5)) (bless (const 5)) (bless (const 5)))) 5))

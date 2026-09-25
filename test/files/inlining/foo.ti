@@ -1,0 +1,9 @@
+
+def (make_lst)
+  `[lst]
+
+def (add1 `[lst ,xs ...])
+  `[lst ,xs ... 1]
+
+def (write `[lst ,xs ...])
+  (write xs)

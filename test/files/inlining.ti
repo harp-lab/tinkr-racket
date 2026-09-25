@@ -1,12 +1,18 @@
 
+def (do_add xs ...)
+  (+ xs ...)
+
 def (main)
 {
   def (do_add n)
     (+ n 1)
 
-  let a (do_add 5)
-  let b 6
-  ;;let f (lambda (x) (+ x 1))
-  ;;(debug_print (write (f (+ a b))))
-  (debug_print (write (+ a b)))
+  {
+    let a (do_add 5)
+    let b 6
+    (debug_print (write (+ a b)))
+
+    let c (do_add 5 6 7)
+    (debug_print (write c))
+  }
 }

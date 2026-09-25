@@ -40,18 +40,27 @@
          (struct-out opnd)
          construct-operand
          construct-operands
+         get-op-size-total
 
          (struct-out var)
          new-variable
          copy-variable
          copy-variables
          variable-set-op
+         inc-flag!
+         dec-flag!
 
-         apply-to-ref-sym)
+         apply-to-ref-sym
+         fn-is-variadic?
+         param-list-is-variadic?
+         
+         copyable?
+         small-bless?
+         visit-op-cache)
 
 ;; Parameters
-(define effort-bound 200)
-(define size-bound 30)
+(define effort-bound 500)
+(define size-bound 3000)
 
 (define (get-effort-bound) effort-bound)
 (define (get-size-bound) size-bound)
@@ -59,7 +68,7 @@
 (define (set-size-bound! v) (set! size-bound v))
 
 (struct environment
-  [bindings         ;; (HashOf Symbol Var) ;; TODO: is this the right type?
+  [bindings         ;; (HashOf Symbol Var)
    effort-counter   ;; (or #f (BoxOf Integer))
    size-total       ;; (or #f (BoxOf Integer))
    size-delta       ;; (or #f (BoxOf Integer))
@@ -74,13 +83,16 @@
    cache]  ;; (BoxOf Expr)
   #:transparent)
 
+;; Note: op can be singular, variadic, or non-existent (i.e. the var is not bound to anything)
 (struct var
   [name           ;; Symbol
-   op             ;; Opnd
-   flags          ;; (MutableSetOf VarFlag)
-   source-flags]  ;; (SetOf VarFlag)
+   op             ;; (or BoundOpnd #f)
+   flags          ;; (MutableHashOf VarFlag Any)
+   source-flags]  ;; (HashOf VarFlag Any)
   #:transparent)
 ;; Where VarFlag can be one of 'ref or 'copied
+;; And BoundOpnd is (or Opnd VariadicOpnd)
+;; And VariadicOpnd is (ListOf Opnd)
 
 ;; A Context is one of 'effect, 'test, 'value, or an AppContext
 
@@ -127,8 +139,12 @@
   (hash-has-key? (environment-bindings env) (var-name x)))
 
 (define (env-ref env x)
+  (when (not (hash-has-key? (environment-bindings env) (var-name x)))
+    (error 'inlining (format "Inlining environment does not have key ~a" (var-name x))))
+
   (hash-ref (environment-bindings env) (var-name x)))
 
+;; Environment (ListOf Var) (ListOf Var) -> Environment
 (define (extend-env env xs xs^)
   (define bindings
     (for/fold ([bindings (environment-bindings env)])
@@ -144,6 +160,8 @@
     (environment-abort-kont env)
     (environment-under-blessed? env)))
 
+;; Environment (ListOf Var) (ListOf Var) -> Environment
+;; Note: None of the xs^ vars should be bound to a variadic operand.
 (define (extend-env-circular env xs xs^)
   (define bindings
     (for/fold ([bindings (environment-bindings env)])
@@ -267,14 +285,23 @@
 (define (construct-operands exprs env)
   (map (lambda (e) (construct-operand e env)) exprs))
 
+;; BoundOpnd -> Int
+(define (get-op-size-total bound-op)
+  (match bound-op
+    [(opnd e (box env) c)
+      (get-env-size-total env)]
+    [(list ops ...)
+      (for/sum ([op ops])
+        (get-op-size-total op))]))
+
 ;; Symbol -> Var
 (define (new-variable x-sym)
-  (var x-sym '() (mutable-set) (set)))
+  (var x-sym #f (make-hash) (hash)))
 
 ;; Var -> Var
 (define (copy-variable x)
   (match-define (var x-sym op flags source-flags) x)
-  (define x^ (var (gensym x-sym) op (mutable-set) flags))
+  (define x^ (var (gensym x-sym) op (make-hash) flags))
   x^)
 
 ;; (ListOf Var) -> (ListOf Var)
@@ -286,7 +313,75 @@
   (match-define (var x-sym _ flags source-flags) x)
   (var x-sym op flags source-flags))
 
+(define (inc-flag! flags flag)
+  (hash-set! flags flag (add1 (hash-ref flags flag 0))))
+
+(define (dec-flag! flags flag)
+  (hash-set! flags flag (sub1 (hash-ref flags flag 0))))
+
 (define (apply-to-ref-sym ref f)
   (match ref
     [`(ref ,x) `(ref ,(f x))]
     [`(|...| (ref ,x)) `(|...| (ref ,(f x)))]))
+
+(define (param-list-is-variadic? fn)
+  (match fn
+    [`(,xs ... (|...| (ref ,last-ref)))
+      #t]
+    [_ #f]))
+
+(define (fn-is-variadic? fn)
+  (match fn
+    [`(fn (,xs ... (|...| (ref ,last-ref))) ,anns ,body)
+      #t]
+    [_ #f]))
+
+;; Expr -> Bool
+(define (copyable? e)
+  (define e-tag (car e))
+
+  ;; TODO: temp hack for constants
+  (define is-good?
+    (match e
+      [`((extern-ref _init_from_s64) ,a ,b ,c ,d) #t]
+      [_ #f]))
+
+  (cond
+    [(equal? e-tag 'const) #t]
+
+    ;; Small enough bless
+    [(and (equal? e-tag 'bless) (small-bless? e)) #t]
+
+    [is-good? #t]
+
+    [(or (equal? e-tag 'ref) (equal? e-tag 'fallback-ref))
+      #t]
+
+    [(equal? e-tag 'extern-ref) #t]
+
+    [else
+      #f]))
+
+(define (small-bless? expr)
+  (match expr
+    [`(bless (const ,c)) #t]
+    [_ #f]))
+
+(define (visit-op-cache bound-op)
+  (match bound-op
+    ;; Singular operand
+    [(opnd e (box env) cache)
+      (unbox cache)]
+    
+    ;; Variadic operand
+    [(list ops ...)
+      (define cs (map (lambda (op) (visit-op-cache op)) ops))
+      (if (andmap cs)
+          `(|[]| ,@cs)
+          #f)]))
+
+(module+ test
+  (require rackunit)
+  
+  (check-equal? (fn-is-variadic? '(fn ((ref x) (ref y) (|...| (ref z))) () (ref body))) #t)
+  (check-equal? (fn-is-variadic? '(fn ((ref x) (ref y) (ref z)) () (ref body))) #f))

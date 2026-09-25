@@ -1,0 +1,12 @@
+include "foo.ti"
+
+;; Can't inline add1 with only single module compilation (since other module can extend it)
+
+def (add1 x)
+  (+ x 1)
+
+def (main)
+{
+  (debug_print (write (add1 1)))
+  (debug_print (write (add1 (make_lst))))
+}

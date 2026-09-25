@@ -16,3 +16,9 @@
   (hash
     'eq bp-eq
     'equal bp-equal))
+
+(module+ test
+  (require rackunit)
+  
+  (check-equal? (bp-equal `(const 1) `(const 1)) `(const true))
+  (check-equal? (bp-equal `(const 1) `(const 2)) `(const false)))
