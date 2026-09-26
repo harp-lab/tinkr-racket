@@ -102,12 +102,12 @@
         ;; Always go down the true branch
         [(equal? g-res '(const true))
          (define e1^ (optimize/ast e1 e-context env))
-         (make-seq g^ e1^)]
+         (make-opt-seq env g^ e1^)]
 
         ;; Always go down the false branch
         [(equal? g-res '(const false))
          (define e2^ (optimize/ast e2 e-context env))
-         (make-seq g^ e2^)]
+         (make-opt-seq env g^ e2^)]
         
         ;; Could be either branch
         [else
@@ -118,7 +118,7 @@
             ;; Both branches evaluate to the same constant, so just return the constant,
             ;; letting the guard expression be evaluated for just its effect.
             [(`(const ,c1) `(const ,c2)) #:when (equal? c1 c2)
-              (make-seq g^ e1^)]
+              (make-opt-seq env g^ e1^)]
             
             ;; Otherwise, just return the if
             [(_ _)
@@ -133,13 +133,14 @@
     [`(fail (ref ,fx) ,es ...)
      (define fail-app
       (if (param-list-is-variadic? es)
-          (let ([first-es (all-but-last es)]
+          (let ([fallback-ref (first es)]
+                [first-es (drop (all-but-last es) 2)] ;; Drop fallback and arg_count
                 [last-e (last es)])
             (match-define `(|...| ,last-e-ref) last-e)
             (define arg-list
               `((prim-ref _slice_concat) (const void) (bless (const 2)) (|[]| ,@first-es) ,last-e-ref))
             
-            `((prim-ref _apply) (const void) (bless (const 2)) (ref ,fx) ,arg-list))
+            `((prim-ref _apply_with_fallback) (const void) (bless (const 3)) (ref ,fx) ,fallback-ref ,arg-list))
           
           `((ref ,fx) ,@es)))
 
@@ -209,16 +210,39 @@
 
      ;; We can remove the let binding if x is not referenced in the body
      (if (not x-is-ref)
-         (make-seq op-e body^)
+         (make-opt-seq env op-e body^)
          `(let (ref ,x^) ,op-e ,body^))]
 
-    ;; TODO:
+    ;; Slices
+    [`(|[]|)
+      (cond
+        [(effect-context? context) (inc-size-total! env) `(const void)]
+        [(test-context? context) (inc-size-total! env) `(const true)]
+        [else (inc-size-total! env) `(|[]|)])]
     [`(|[]| ,es ...)
-     (inc-size-total! env)
-     (define e^
-     `(|[]| ,@(map (lambda (e)
-                      (optimize/ast e 'value env)) es)))
-      e^]
+      (cond
+        [(or (effect-context? context) (test-context? context))
+          (displayln "inside slices with effect/test context")
+          (displayln es)
+
+          (define es^
+            (map (lambda (e)
+                    (optimize/ast e 'effect env)) es))
+
+          (if (effect-context? context)
+              (apply make-opt-seq env es^)
+
+              (begin
+                (inc-size-total! env)
+                (apply make-opt-seq env (append es^ (list `(const true))))))]
+        [else
+          (define e^
+            `(|[]| ,@(map (lambda (e)
+                            (optimize/ast e 'value env)) es)))
+
+          (inc-size-total! env)
+
+          e^])]
 
     ;; Inner def
     [`(def ((ref ,fx) ,params ...) ,anns ... ,body ,more)
@@ -271,25 +295,36 @@
         ;; Application context, so try to apply the primitive.
         [(app-context? context)
           (match-define (app-context ops outer-context inlined?) context)
-          (define op-es (map (lambda (op) (visit-op op 'value)) ops))
-          (define es (map result op-es))
-          (define (prim-app-fail)
-            (inc-size-total! env)
-            `(prim-ref ,x))
 
-          (cond
-            [(hash-has-key? primitives x)
-              (define p-fun (hash-ref primitives x))
-              (define result (apply p-fun es)) ;; TODO: Should probably check for arity errors here
+          (cond 
+            [(and (test-context? outer-context) (primitive-is-truthy? x))
+              (define op-es (map (lambda (op) (visit-op op 'effect)) ops))
+              (set-box! inlined? #t)
+              (apply make-opt-seq env (append op-es (list `(const true))))]
+            [(and (effect-context? outer-context) (primitive-has-no-effect? x))
+              (define op-es (map (lambda (op) (visit-op op 'effect)) ops))
+              (set-box! inlined? #t)
+              (apply make-opt-seq env op-es)]
+            [else
+              (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+              (define es (map result op-es)) ;; TODO: we may be discarding effectful values here!
+              (define (prim-app-fail)
+                (inc-size-total! env)
+                `(prim-ref ,x))
 
-              (if result
-                  ;; The returned result may be reducible
-                  (let ([opt-result (optimize/ast result 'value env)])
-                    (set-box! inlined? #t)
-                    opt-result)
-                  
-                  (prim-app-fail))]
-            [else (prim-app-fail)])]
+              (cond
+                [(primitive-has-fun? x)
+                  (define p-fun (get-primitive-fun x))
+                  (define result (apply p-fun es)) ;; TODO: Should probably check for arity errors here
+
+                  (if result
+                      ;; The returned result may be reducible
+                      (let ([opt-result (optimize/ast result 'value env)])
+                        (set-box! inlined? #t)
+                        opt-result)
+                      
+                      (prim-app-fail))]
+                [else (prim-app-fail)])])]
         
         [else
           (error 'inlining "Invalid context.")])]
@@ -467,20 +502,16 @@
       (match-define `(fn (,params^ ...) ,anns ,body^) op-e)
 
       `(def ((ref ,fx) ,@params^) ,@anns ,body^)))
-  
+
   (nest-sibling-defs defs^ more^))
 
 ;; Environment Var -> Var
-;; Resolves a var reference site to its current binding.
-;;
-;; Normally x is an unresolved reference and must be present in env under its
-;; original (pre-rename) name. (This can happen when re-optimizing an AST containing
-;; free variables which have already been renamed).
+;; Resolves a var reference site to its current binding. If it doesn't
+;; exist in the environment, then x is just returned.
 (define (resolve-ref env x)
   (cond
     [(env-has? env x) (env-ref env x)]
-    [(var-op x) x]
-    [else (env-ref env x)])) ;; not found and not already-resolved: let env-ref raise its error
+    [else x]))
 
 ;; BoundOpnd Context -> Expr
 ;; Residualize an operand/argument expression (if it has already been visited,
@@ -514,10 +545,7 @@
   (define e-tag (car e))
 
   ;; TODO: temp hack for constants
-  (define is-good?
-    (match e
-      [`((extern-ref _init_from_s64) ,a ,b ,c ,d) #t]
-      [_ #f]))
+  (define is-good? (int-const? e))
 
   (cond
     ;; Propogate constants
@@ -632,9 +660,25 @@
         (for ([op ops])
           (accumulate-size-total! env (get-op-size-total op)))
 
-        (apply make-seq (append op-es (list body^))))
+        (apply make-opt-seq env (append op-es (list body^))))
       
       #f))
+
+;; Try optimizing the seq in addition to making it
+(define (make-opt-seq env . es)
+  (define seq-e (apply make-seq es))
+
+  (match seq-e
+    [`(seq ,for-effect ,result)
+      (try-optimize env
+        (lambda (env^)
+          (define seq-e^ (optimize/ast for-effect 'effect env^))
+          (if (no-effect? seq-e^)
+              result
+              `(seq ,seq-e^ ,result)))
+        (lambda () ;; On abort:
+          seq-e))]
+    [_ seq-e]))
 
 ;; Helper to sequence expressions (ensuring that the
 ;; last expression in the sequence is not a sequence itself).
@@ -853,7 +897,7 @@
     [`((ref ,blessed-fx) ,es ...) #:when under-blessed?
       `((blessed-prim ,blessed-fx) ,@(map recur es))]
 
-    [`(ref ,x) #:when (set-member? (hash-keys primitives) x)
+    [`(ref ,x) #:when (is-primitive? x)
       `(prim-ref ,x)]
 
     ;; TODO: we may want to handle true and false differently in the rest of the compiler (since
@@ -957,8 +1001,7 @@
           (ref a)
       ((ref fx) (bless (const 5))))))
   
-  ;; TODO: failing test case
-  (check-equal? (optimize/def (optimize/def test-p1))
+  (check-equal? (optimize/def test-p1)
                 '(def ((ref main)) () (bless (const 5))))
 
   (define (test-size-count op-e)

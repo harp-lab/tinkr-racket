@@ -117,6 +117,7 @@
 
       ;; Untagged application
       [`((ref ,fx) ,es ...) (map recur ast)]
+      [`((fallback-ref ,fx) ,es ...) (map recur ast)]
 
       [_ (pretty-print ast)
         (error 'alphatize-error)]))

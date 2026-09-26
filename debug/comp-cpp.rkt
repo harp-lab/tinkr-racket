@@ -42,7 +42,7 @@
   (define compiler-flags (string-split (c-flags)))
   (define linker-flags (string-split (c-flags)))
 
-  (define options (build-options (debug-mode) #f (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags) (print-cmds) compiler-flags linker-flags))
+  (define options (build-options (debug-mode) #f (not (no-lto)) (not (no-opt)) (no-strict-aliasing) (show-flags) (print-cmds) #t #t compiler-flags linker-flags))
   (set-options! options)
 
   (current-directory "/tmp/ti/build")

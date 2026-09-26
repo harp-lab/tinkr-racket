@@ -55,6 +55,7 @@
          param-list-is-variadic?
          
          copyable?
+         int-const?
          small-bless?
          visit-op-cache)
 
@@ -337,14 +338,18 @@
     [_ #f]))
 
 ;; Expr -> Bool
+;; TODO: we should handle _init_from_s64 better
+(define (int-const? e)
+  (match e
+    [`((,(or 'extern-ref 'prim-ref) _init_from_s64) ,_ ,_ ,_ ,_) #t]
+    [_ #f]))
+
+;; Expr -> Bool
 (define (copyable? e)
   (define e-tag (car e))
 
   ;; TODO: temp hack for constants
-  (define is-good?
-    (match e
-      [`((extern-ref _init_from_s64) ,a ,b ,c ,d) #t]
-      [_ #f]))
+  (define is-good? (int-const? e))
 
   (cond
     [(equal? e-tag 'const) #t]
@@ -376,7 +381,7 @@
     ;; Variadic operand
     [(list ops ...)
       (define cs (map (lambda (op) (visit-op-cache op)) ops))
-      (if (andmap cs)
+      (if (andmap identity cs)
           `(|[]| ,@cs)
           #f)]))
 

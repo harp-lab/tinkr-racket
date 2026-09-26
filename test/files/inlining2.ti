@@ -1,0 +1,18 @@
+
+def (do_add x y xs ...)
+  (+ x y xs ...)
+
+def (main)
+{
+  def (do_add (? x int) (? y int))
+    (+ x y)
+
+  {
+    let a (do_add 4 5)
+    let b 6
+    (debug_print (write (+ a b)))
+
+    let c (do_add "hello " "world")
+    (debug_print (write c))
+  }
+}

@@ -161,9 +161,14 @@ blessed (_apply_on_slice f arg_count arg0 arg1 arg2 arg3 rest_args)
   }
 }
 
-;; FunPtr FunPtr Slice ->
-;; Similar to _apply except it applies f with a fallback
+;; (or FunPtr Closure) FunPtr Slice ->
+;; Similar to _apply except it applies f with a fallback if it is a
+;; FunPtr (otherwise the fallback isn't needed).
 def (_apply_with_fallback f fallback args)
+  let tag (bless (u64bit_and 7 f))
+  if (bless (convert_bool (eq tag 1))) ;; heap object: must be a closure so just apply normally
+    (_apply f args)
+
   if (= args empty) (raw_apply_with_fallback f fallback (bless 0))
   let a0 = (first args)
   let r0 = (rest args)
