@@ -71,8 +71,8 @@
 	       (foldl string-append ""
 		      (map (lambda (name)
 			     (format "(compile-one \"~a\" ~a ~a)" name
-           (build-options-well-known? options)
-           (and (string-contains? (format "~a" name) "inlining") (build-options-inlining? options)))) ;; TODO: temp guard for inlining
+                   (build-options-well-known? options)
+                   (build-options-inlining? options)))
 			   folder-names))))
      
      (when (build-options-separate-logs? options)

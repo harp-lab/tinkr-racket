@@ -61,7 +61,7 @@
         [(effect-context? context) '(const void)]
 
         ;; All values except (const false) are truthy. ;; TODO: is this correct?
-        [(and (test-context? context) (not (equal? c '(const false))))
+        [(and (test-context? context) (not (equal? c 'false)))
           '(const true)]
 
         ;; We need the value of the constant still
@@ -69,7 +69,6 @@
 
     [`(bless ,e0)
      (cond
-      [(effect-context? context) (inc-size-total! env) '(const void)]
       [(test-context? context)
         (define e0^ (optimize/ast e0 context (set-env-under-blessed env #t)))
 
@@ -127,9 +126,8 @@
     ;; TODO:
     [`(continue-dispatch ,es ...)
      (inc-size-total! env)
-     `(continue-dispatch ,@es)]
+     `(continue-dispatch ,@(map (lambda (e) (optimize/ast e 'value env)) es))]
 
-    ;; TODO:
     [`(fail (ref ,fx) ,es ...)
      (define fail-app
       (if (param-list-is-variadic? es)
@@ -165,11 +163,6 @@
     [`(,ell ,e0) #:when (eq? ell '|...|)
      (inc-size-total! env)
      `(,ell ,(optimize/ast e0 'value env))]
-    
-    ;; TODO:
-    [`(,(and ctor (or 'object 'subword)) ,es ...)
-      (inc-size-total! env)
-      `(,ctor ,@(map (lambda (e) (optimize/ast e 'value env)) es))]
 
     ;; Simple reference propogation
     [`(let (ref ,x) (ref ,y) ,body)
@@ -213,6 +206,16 @@
          (make-opt-seq env op-e body^)
          `(let (ref ,x^) ,op-e ,body^))]
 
+    ;; Objects and subwords
+    ;; TODO: what about the false subword in test context?
+    [`(,(and ctor (or 'object 'subword)) ,tag) ;; empty
+      (cond
+        [(effect-context? context) (inc-size-total! env) `(const void)]
+        [(test-context? context) (inc-size-total! env) `(const true)]
+        [else (inc-size-total! env) `(,ctor ,tag)])]
+    [`(,(and ctor (or 'object 'subword)) ,es ...)
+      (handle-child-es ctor es context env)]
+
     ;; Slices
     [`(|[]|)
       (cond
@@ -220,29 +223,7 @@
         [(test-context? context) (inc-size-total! env) `(const true)]
         [else (inc-size-total! env) `(|[]|)])]
     [`(|[]| ,es ...)
-      (cond
-        [(or (effect-context? context) (test-context? context))
-          (displayln "inside slices with effect/test context")
-          (displayln es)
-
-          (define es^
-            (map (lambda (e)
-                    (optimize/ast e 'effect env)) es))
-
-          (if (effect-context? context)
-              (apply make-opt-seq env es^)
-
-              (begin
-                (inc-size-total! env)
-                (apply make-opt-seq env (append es^ (list `(const true))))))]
-        [else
-          (define e^
-            `(|[]| ,@(map (lambda (e)
-                            (optimize/ast e 'value env)) es)))
-
-          (inc-size-total! env)
-
-          e^])]
+      (handle-child-es '|[]| es context env)]
 
     ;; Inner def
     [`(def ((ref ,fx) ,params ...) ,anns ... ,body ,more)
@@ -285,7 +266,6 @@
               app-result
               (optimize/ast ast 'value env))])]
 
-    ;; TODO:
     [`(prim-ref ,x)
       (cond
         [(test-context? context) (inc-size-total! env) '(const true)]
@@ -337,7 +317,7 @@
 
       (cond
         ;; If in an effect context, then we don't care about the reference
-        [(equal? context 'effect)
+        [(effect-context? context)
           (inc-size-total! env)
           '(const void)]
 
@@ -367,10 +347,16 @@
 
           (copy x^ (result op-e) context env)])]
 
-    [(or `(extern-ref ,x) `(fallback-ref ,x))
+    [`(extern-ref ,x)
      (inc-size-total! env)
      (cond
-        [(test-context? context) '(const true)]
+        [(effect-context? context) '(const void)]
+        [else ast])]
+
+    [`(fallback-ref ,x)
+     (inc-size-total! env)
+     (cond
+        [(test-context? context) '(const true)] ;; a fallback-ref is never bound to false value
         [(effect-context? context) '(const void)]
         [else ast])]
 
@@ -424,6 +410,30 @@
           (accumulate-size-total! env (get-op-size-total op)))
 
         `(,ef^ ,@op-es)])]))
+
+;; Symbol (ListOf Expr) Context Environment -> Expr
+;; e-tag should be one of 'object, 'subword, or '|[]|
+(define (handle-child-es e-tag es context env)
+  (cond
+    [(or (effect-context? context) (test-context? context))
+      (define es^
+        (map (lambda (e)
+                (optimize/ast e 'effect env)) es))
+
+      (if (effect-context? context)
+          (apply make-opt-seq env es^)
+
+          (begin
+            (inc-size-total! env)
+            (apply make-opt-seq env (append es^ (list `(const true))))))]
+    [else
+      (define e^
+        `(,e-tag ,@(map (lambda (e)
+                        (optimize/ast e 'value env)) es)))
+
+      (inc-size-total! env)
+
+      e^]))
 
 (define (handle-inner-def ast context env)
   (define-values (defs more) (get-nested-sibling-defs ast))
@@ -553,7 +563,7 @@
       (optimize/ast e context env)]
 
     ;; Small enough bless
-    [(and (equal? e-tag 'bless) (small-bless? e))
+    [(and (equal? e-tag 'bless) (small-bless? e)) ;; Note/TODO: be wary of effectful bless
       (if (get-env-under-blessed? env)
           ;; Already under a bless, so just propogate the inner expression
           (match e
@@ -722,7 +732,7 @@
   (match expr
     [`(const false) #f]
     [`(const ,_) #t]
-    [`(extern-ref ,_) #t]
+    [`(extern-ref ,_) #f]
     [`(fallback-ref ,_) #t]
     [_ (displayln 'TODO-extend-truthy?) #f]))
 
@@ -1001,8 +1011,19 @@
           (ref a)
       ((ref fx) (bless (const 5))))))
   
+  (define test-p2
+    `(def ((ref main)) ()
+      (let (ref x) (if (ref true) (ref false) (ref false))
+           (if (ref x)
+               (ref x)
+               (if (ref true) (ref true) (ref false))))))
+
+  ;; TODO: Failing since blessed-prims and other bless expression need to be handled for effect correctly
   (check-equal? (optimize/def test-p1)
                 '(def ((ref main)) () (bless (const 5))))
+
+  (check-equal? (optimize/def test-p2)
+                '(def ((ref main)) () (ref true)))
 
   (define (test-size-count op-e)
     (define op-test

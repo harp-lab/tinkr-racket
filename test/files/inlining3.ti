@@ -1,0 +1,11 @@
+
+def (main)
+{
+  {
+    let f (lambda (x) x)
+    let a (f 5)
+    let b 6
+    let c (f (+ 1 2))
+    (debug_print (write (+ a b c)))
+  }
+}
