@@ -1,1 +1,4 @@
 compiled
+bench/results/
+venv
+__pycache__

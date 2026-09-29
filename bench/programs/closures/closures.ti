@@ -1,0 +1,10 @@
+;; Repeatedly creates and applies small closures (a good target for inlining)
+def (compose f g) (lambda (x) (f (g x)))
+def (make_adder n) (lambda (x) (+ x n))
+
+def (loop 0 acc) acc
+def (loop n acc)
+  let f (compose (make_adder 1) (make_adder n))
+  (loop n-1 (f acc))
+
+def (main) (debug_print (write (loop 1000000 0)))

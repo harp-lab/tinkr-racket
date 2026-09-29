@@ -1,0 +1,5 @@
+;; Tail-recursive loop summing 1..n
+def (loop 0 acc) acc
+def (loop n acc) (loop n-1 (+ acc n))
+
+def (main) (debug_print (write (loop 3000000 0)))

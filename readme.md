@@ -14,11 +14,17 @@ This project requires a few dependencies which can be installed with:
 
 ```
 sudo apt-get install libgc-dev
-sudp apt-get install libgmp-dev
+sudo apt-get install libgmp-dev
 sudo apt-get install lld
 ```
 
-- Try running `racket temp.rkt` to compile.
+- Try running `racket test/test.rkt test/new_tests/if.ti`
+  - Note: `test/test.rkt` has a few helpful command line options.
 - Run `/tmp/ti/out.bin` to execute the compiled program.
 - Build info can be found in the `/tmp/ti` directory.
 - Run all tests with `python test/test.py -a`. Run the script with `-h` option for more options.
+
+## Benchmarks
+
+- Python is needed with the libraries in `requirements.txt` installed (recommendation: use a Python virtual env).
+- Try running: `python bench/bench.py`
