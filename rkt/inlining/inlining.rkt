@@ -69,6 +69,12 @@
 
     [`(bless ,e0)
      (cond
+      [(effect-context? context)
+        (define e0^ (optimize/ast e0 context (set-env-under-blessed env #t)))
+
+        (match e0^
+          ['(const void) '(const void)]
+          [else `(bless ,e0^)])]
       [(test-context? context)
         (define e0^ (optimize/ast e0 context (set-env-under-blessed env #t)))
 
@@ -274,38 +280,9 @@
 
         ;; Application context, so try to apply the primitive.
         [(app-context? context)
-          (match-define (app-context ops outer-context inlined?) context)
+          (optimize-prim-app ast context env
+            primitive-is-truthy? primitive-has-no-effect? primitive-has-fun? get-primitive-fun)]
 
-          (cond 
-            [(and (test-context? outer-context) (primitive-is-truthy? x))
-              (define op-es (map (lambda (op) (visit-op op 'effect)) ops))
-              (set-box! inlined? #t)
-              (apply make-opt-seq env (append op-es (list `(const true))))]
-            [(and (effect-context? outer-context) (primitive-has-no-effect? x))
-              (define op-es (map (lambda (op) (visit-op op 'effect)) ops))
-              (set-box! inlined? #t)
-              (apply make-opt-seq env op-es)]
-            [else
-              (define op-es (map (lambda (op) (visit-op op 'value)) ops))
-              (define es (map result op-es)) ;; TODO: we may be discarding effectful values here!
-              (define (prim-app-fail)
-                (inc-size-total! env)
-                `(prim-ref ,x))
-
-              (cond
-                [(primitive-has-fun? x)
-                  (define p-fun (get-primitive-fun x))
-                  (define result (apply p-fun es)) ;; TODO: Should probably check for arity errors here
-
-                  (if result
-                      ;; The returned result may be reducible
-                      (let ([opt-result (optimize/ast result 'value env)])
-                        (set-box! inlined? #t)
-                        opt-result)
-                      
-                      (prim-app-fail))]
-                [else (prim-app-fail)])])]
-        
         [else
           (error 'inlining "Invalid context.")])]
 
@@ -364,25 +341,10 @@
       (cond
         ;; Application context, so try to apply the primitive.
         [(app-context? context)
-          (match-define (app-context ops outer-context inlined?) context)
-          (define op-es (map (lambda (op) (visit-op op 'value)) ops))
-          (match (map result op-es)
-            ;; All the args are constant, so just apply the primitive.
-            [(list `(const ,cs) ...) #:when (hash-has-key? bless-primitives x)
-              (define const-cs (map (lambda (c) `(const ,c)) cs))
+          (optimize-prim-app ast context env
+            bless-primitive-is-truthy? bless-primitive-has-no-effect?
+            bless-primitive-has-fun? get-bless-primitive-fun)]
 
-              (define p-fun (hash-ref bless-primitives x))
-              (define new-c (apply p-fun const-cs)) ;; TODO: Should probably check for arity errors here
-              (set-box! inlined? #t)
-              (inc-size-total! env)
-
-              new-c]
-
-            ;; Otherwise, just leave the primitive application alone.
-            [_
-              (inc-size-total! env)
-              `(blessed-prim ,x)])]
-        
         [else
           (error 'inlining "blessed-prim should only occur in an application context: ~a" ast)])]
 
@@ -410,6 +372,43 @@
           (accumulate-size-total! env (get-op-size-total op)))
 
         `(,ef^ ,@op-es)])]))
+
+;; Expr AppContext Environment (Symbol -> Bool) (Symbol -> Bool) (Symbol -> Bool) (Symbol -> Function) -> Expr
+;; Handles a primitive (either a `prim-ref` or a `blessed-prim`) in an application context. The
+;; primitive table lookups are passed in so that both kinds of primitives are handled the same way.
+(define (optimize-prim-app prim-e context env is-truthy? has-no-effect? has-fun? get-fun)
+  (match-define `(,_ ,x) prim-e)
+  (match-define (app-context ops outer-context inlined?) context)
+
+  (cond 
+    [(and (test-context? outer-context) (is-truthy? x))
+      (define op-es (map (lambda (op) (visit-op op 'effect)) ops))
+      (set-box! inlined? #t)
+      (apply make-opt-seq env (append op-es (list `(const true))))]
+    [(and (effect-context? outer-context) (has-no-effect? x))
+      (define op-es (map (lambda (op) (visit-op op 'effect)) ops))
+      (set-box! inlined? #t)
+      (apply make-opt-seq env op-es)]
+    [else
+      (define op-es (map (lambda (op) (visit-op op 'value)) ops))
+      (define es (map result op-es)) ;; TODO: we may be discarding effectful values here!
+      (define (prim-app-fail)
+        (inc-size-total! env)
+        prim-e)
+
+      (cond
+        [(has-fun? x)
+          (define p-fun (get-fun x))
+          (define result (apply p-fun es)) ;; TODO: Should probably check for arity errors here
+
+          (if result
+              ;; The returned result may be reducible
+              (let ([opt-result (optimize/ast result 'value env)])
+                (set-box! inlined? #t)
+                opt-result)
+              
+              (prim-app-fail))]
+        [else (prim-app-fail)])]))
 
 ;; Symbol (ListOf Expr) Context Environment -> Expr
 ;; e-tag should be one of 'object, 'subword, or '|[]|
@@ -1018,7 +1017,6 @@
                (ref x)
                (if (ref true) (ref true) (ref false))))))
 
-  ;; TODO: Failing since blessed-prims and other bless expression need to be handled for effect correctly
   (check-equal? (optimize/def test-p1)
                 '(def ((ref main)) () (bless (const 5))))
 
