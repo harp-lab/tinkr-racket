@@ -1,0 +1,9 @@
+include "lib.ti"
+
+def (main)
+  def (g 1) 101
+
+  {
+    (debug_print (write (g 1)))
+    (debug_print (write (g 5)))
+  }

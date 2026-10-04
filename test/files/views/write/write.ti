@@ -1,0 +1,5 @@
+
+def (new_write [x rest ...])
+  (new_write x) + ", " + (new_write rest)
+def (new_write x)
+  (write x)

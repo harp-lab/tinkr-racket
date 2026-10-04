@@ -1,0 +1,4 @@
+def (main)
+    let a {`A}
+    let b (prim_set_first a)
+    (debug_print (write b))

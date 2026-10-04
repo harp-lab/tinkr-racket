@@ -1,0 +1,12 @@
+include "write.ti"
+include "print.ti"
+
+def (new_write `[set]) "set"
+
+def (main)
+{
+	;; If the new_write for `[set] was moved into this scope, then it wouldn't be reachable by print
+
+	(debug_print (new_write [`[set]]))
+	(print `[set])
+}

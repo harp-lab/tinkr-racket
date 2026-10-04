@@ -52,8 +52,10 @@ blessed (plus x y) ("($0 + $1)" x y)
 blessed (minus x y) ("($0 - $1)" x y)
 blessed (times x y) ("($0 * $1)" x y)
 blessed (div x y) ("($0 / $1)" x y)
+blessed (mod x y) ("($0 % $1)" x y)
 blessed (lte x y) ("($0 <= $1)" x y)
 blessed (lt x y) ("($0 < $1)" x y)
+blessed (not x) ("!($0)" x)
 
 blessed (rshift x n) ("($0 >> $1)" (u64_t x) (u32_t n))
 blessed (lshift x n) ("($0 << $1)" (u64_t x) (u32_t n))
@@ -68,6 +70,8 @@ blessed (eq x y) ("($0 == $1)" (u64_t x) (u64_t y))
 blessed (equal x y) (cond (eq x y) _true _false)
 blessed (neq x y) ("($0 != $1)" (u64_t x) (u64_t y))
 
+blessed (convert_bool x) (cond x _true _false)
+
 
 ;; Basic Operations (u64)
 blessed (u64rshift x n) (rshift x n)
@@ -81,6 +85,7 @@ blessed (u64plus x y) (plus (u64_t x) (u64_t y))
 blessed (u64minus x y) (minus (u64_t x) (u64_t y))
 blessed (u64times x y) (times (u64_t x) (u64_t y))
 blessed (u64div x y) (div (u64_t x) (u64_t y))
+blessed (u64mod x y) (mod (u64_t x) (u64_t y))
 blessed (u64lte x y) (lte (u64_t x) (u64_t y))
 blessed (u64lt x y) (lt (u64_t x) (u64_t y))
 
@@ -97,6 +102,7 @@ blessed (s64plus x y) (plus (s64_t x) (s64_t y))
 blessed (s64minus x y) (minus (s64_t x) (s64_t y))
 blessed (s64times x y) (times (s64_t x) (s64_t y))
 blessed (s64div x y) (div (s64_t x) (s64_t y))
+blessed (s64mod x y) (mod (s64_t x) (s64_t y))
 blessed (s64lte x y) (lte (s64_t x) (s64_t y))
 blessed (s64lt x y) (lt (s64_t x) (s64_t y))
 
@@ -136,6 +142,20 @@ blessed (alloc_attempt x n)
          (assign alloc_fr (many_t (plus (manys_t alloc_fr) n))))
 
 
+blessed (set_tag x t) (u64bit_or t (top61 x))
+
+
+;; Slices
+blessed (tag_as_slice s) (u64bit_or 2 s)
+
+blessed (bl_slice_first s) (deref (anys_t (top61 s)))
+blessed (bl_slice_rest s) (tag_as_slice (plus (anys_t (top61 s)) 1))
+
+blessed (bl_slice_empty s)
+  (u64bit_or (eq s _empty)
+             (u64bit_or (eq 0 (bl_slice_first s)) (eq 255 (u64bit_and 255 (bl_slice_first s)))))
+
+
 ;; C calls of length 0 - 13
 blessed (call_0 cname) ("$0()" cname)
 blessed (call_1 cname x0) ("$0($1)" cname x0)
@@ -165,12 +185,4 @@ blessed (call_12 cname x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
 blessed (call_13 cname x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
   ("$0($1,$2,$3,$4,$5,$6,$7,$8,$9)" cname x0 x1 x2 x3 x4 x5 x6 x7
    ("$0,$1,$2,$3,$4" x8 x9 x10 x11 x12))
-
-
-
-
-
-
-
-
 

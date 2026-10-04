@@ -1,0 +1,5 @@
+def (main)
+    let a {`A `B `C}
+    let a (prim_set_remove a `A)
+    let a (prim_set_remove a `B)
+    (debug_print (write a))

@@ -1,0 +1,9 @@
+include "a.ti"
+include "b.ti"
+
+def (main)
+{
+  (debug_print (write (foo 1)))
+  (debug_print (write (foo 2)))
+  (debug_print (write (foo 77)))
+}

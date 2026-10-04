@@ -1,0 +1,9 @@
+def (foo x y) (+ x y)
+
+def (main)
+    let a (foo
+        if 1 10 9
+        5
+    )
+
+    (debug_print (write a))

@@ -1,0 +1,32 @@
+
+def (main)
+  let y 6
+  let z 2
+
+  ;; A more complex free-variable flow graph (for well-known defs)
+
+  def (f1 x)
+    if x < 50
+      (f2 (+ x y))
+      x
+
+  def (f2 x)
+    (f3 (+ x z))
+  
+  def (f3 x)
+    (f1 x + (f5 x))
+
+  ;; f4 needs to be passed all of f1-f6's free vars
+  def (f4 x)
+    (f1 x)
+
+  ;; f5 and f6 don't need to be passed f1-f4's fvs
+  def (f5 x) (f6 (+ x 1))
+  def (f6 x)
+    if x < 10
+       (f5 x)
+       x
+
+  {
+    (debug_print (write (f4 0)))
+  }

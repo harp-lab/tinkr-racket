@@ -1,0 +1,13 @@
+
+def (do_something lsts) true
+
+def (main)
+{
+  let lst [1 2 3]
+  let a `[lsts ,lst]
+  let b `[lsts ,[1 2 3]]
+  {
+    (debug_print (write (do_something a)))
+    (debug_print (write (do_something b)))
+  }
+}

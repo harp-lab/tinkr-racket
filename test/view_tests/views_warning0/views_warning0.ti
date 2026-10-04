@@ -1,0 +1,6 @@
+include "lib23.ti" [rename fast_sort sort] ;; Should recieve a linker warning about shadowing
+
+;; TODO: modify test.py to detect compiler warnings/errors
+
+def (main)
+  (debug_print (write (sort 0)))

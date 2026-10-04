@@ -1,0 +1,7 @@
+def (main)
+    let a # 97 (foo)
+    let b (-> a + 2) + 1
+    (debug_print (write b))
+    
+def (foo)
+    97 <- 2

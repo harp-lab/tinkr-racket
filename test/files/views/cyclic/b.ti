@@ -1,0 +1,4 @@
+include "cyclic.ti"
+
+def (stuff3)
+  "stuff3: " + (stuff1) + " and " + (stuff2)

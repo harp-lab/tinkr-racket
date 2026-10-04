@@ -1,0 +1,8 @@
+include "my-lib.ti"
+include "my-lib.ti" [as lib]
+
+def (main)
+{
+  (debug_print (write (g 3)))
+  (debug_print (write (lib.g 3)))
+}

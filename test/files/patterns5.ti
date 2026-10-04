@@ -1,0 +1,12 @@
+
+def (test1 x y _ _ _)
+  x + y
+def (test1 xs ...)
+  false
+
+def (main)
+{
+  (debug_print "Test 1:")
+  (debug_print (write (test1 1 2 3 4 5)))
+  (debug_print (write (test1 1 2 3 4)))
+}

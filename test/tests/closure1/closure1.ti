@@ -1,0 +1,9 @@
+def (main)
+    let w 100
+    let foo (lambda (x) x + w)
+    let a (bar foo)
+    (debug_print (write a))
+
+def (bar my_fn)
+    let z 10
+    (my_fn z)

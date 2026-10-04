@@ -1,0 +1,6 @@
+def (main)
+    let a if 1
+        if 2 500 100
+        if 3 4 5
+
+    (debug_print (write a))

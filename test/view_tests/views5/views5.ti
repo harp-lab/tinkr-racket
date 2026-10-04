@@ -1,0 +1,10 @@
+include "lib5.ti" [except h] [rename f g]
+
+def (h x) 600
+
+def (main)
+{
+  (debug_print (write (g 1)))
+  (debug_print (write (g 7)))
+  (debug_print (write (h 7)))
+}

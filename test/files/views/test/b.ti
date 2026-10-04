@@ -1,0 +1,7 @@
+include "a.ti"
+
+def (foo 1)
+  "inside b"
+
+def (main)
+  (debug_print (write (bar)))

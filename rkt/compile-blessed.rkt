@@ -6,7 +6,7 @@
 	 compile-bless)
 
 
-(require "utils.rkt")
+(require "utils/utils.rkt")
 
 
 (define (compile-bless-expr ast)
@@ -90,6 +90,14 @@
 	       ", "))
 
 
+(define (get-arg-names args)
+  (map (lambda (a)
+		      (match a
+            [`(ref ,arg) arg]
+            [`((ref |!|) (ref ,arg)) arg]))
+       args))
+
+
 (define (format-body body)
   (match body
     [`((ref |{}|) ,es ...)
@@ -106,6 +114,8 @@
     [`(blessed ((ref ,name) ,args ...) ,body)
      (format "reg_passing AVXRet ~a(many alloc_fr, many alloc_bk, many stack_fr, ~a);\n" name (format-args args))]))
 
+
+(define print-blessed-args #f)
 
 (define (compile-blessed-ast ast) 
   (match ast
@@ -124,7 +134,12 @@
      (format "reg_passing AVXRet ~a(many alloc_fr, many alloc_bk, many stack_fr, ~a)\n{\n  AVXRet r;\n~a~a~a}\n\n"
 	     name
 	     (format-args args)
-	     (format "DBG(\"Entering blessed_t ~a\");\n" name) 
+	     (format "DBG(\"Entering blessed_t ~a: \"~a);\n" name
+         (if print-blessed-args
+             (apply format "<< \"(fallback: \" << DBG_VALUE(~a) << \") \" << \"(arg count: \" << DBG_VALUE_BASE10(~a) << \") \" << DBG_VALUE(~a)
+                            << \", \"<< DBG_VALUE(~a) << \", \" << DBG_VALUE(~a) << \", \"<< DBG_VALUE(~a) << \", \"<< DBG_VALUE(~a) << \", \"<< DBG_VALUE(~a)"
+                           (get-arg-names args))
+             "")) 
 	     (let ([vrs (string-join (map ~a (set->list (collect-mut body))) ", ")])
 	       (if (equal? vrs "")
 		   "  many tmp;\n"
@@ -152,23 +167,26 @@
     ;; Handle inline expression calls
     [`((ref ,fx) ,args ...)
      #:when (hash-has-key? inline-h fx)
+
      (match (hash-ref inline-h fx)
        [`(blessed ((ref ,_) ,params ...) ,body)
-	#:when (= (length params) (length args))
-	((simplify-blessed-expr inline-h)
-	 body
-	 (foldl (lambda (p a env)
-		  (match p [`(ref ,px) (hash-set env px a)]))
-		env
-		params
-		(map recur args)))]
+          #:when (= (length params) (length args))
+        ((simplify-blessed-expr inline-h)
+          body
+          (foldl
+            (lambda (p a env)
+              (match p [`(ref ,px) (hash-set env px a)]))
+            env
+            params
+            (map recur args)))]
        [_ (error "Inline Function ~a does not match call ~a"
-		 (hash-ref inline-h fx) ast)])]
+                 (hash-ref inline-h fx) ast)])]
 
     [_ (error (format "simplify-blessed-expr: unknown expression ~a" ast))]))
 
 
-(define ((simplify-blessed-ast inline-h) ast [env (hash)]) 
+(define ((simplify-blessed-ast inline-h) ast [env (hash)])
+  ;; TODO: recur and t-expr look like duplicates
   (define (recur ast) ((simplify-blessed-ast inline-h) ast env))
   (define (t-expr ast) ((simplify-blessed-expr inline-h) ast env))
   (define mut-vars (collect-mut ast))

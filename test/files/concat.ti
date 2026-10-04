@@ -1,0 +1,5 @@
+
+def (main)
+  ;; Should produce a dispatch error (instead goes into an infinite loop or seg fualts since
+  ;; this will try to dispatch to the k-ary implementation of + which will go into an infinite loop)
+  (debug_print (write (+ 5 [1 2 3])))

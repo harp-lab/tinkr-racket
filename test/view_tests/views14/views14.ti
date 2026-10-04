@@ -1,0 +1,4 @@
+include "a14.ti"
+
+def (main)
+  (debug_print (write (B.g 5)))

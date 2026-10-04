@@ -1,0 +1,28 @@
+
+;; It seems like "g" is the only one that works here
+
+;;let a 0
+;;let b = 1
+;;let c "hello"
+;;let d [" "]
+;;let e b
+;;let f add
+
+def (add x y)
+  (+ x y)
+
+let g `[world]
+
+def (write `[world])
+  "world!"
+
+def (main)
+{
+  ;;(debug_print (write a))
+  ;;(debug_print (write b))
+  ;;(debug_print (write c))
+  ;;(debug_print (write d))
+  ;;(debug_print (write e))
+  ;;(debug_print (write (f 1 2)))
+  (debug_print (write g))
+}

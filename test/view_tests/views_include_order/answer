@@ -1,0 +1,28 @@
+Running "1 then 2" tests
+lib1: add 1 and 2
+lib1: add true and false
+lib2: sub 1 and 2
+lib1: sub true and false
+lib1: mul 1 and 2
+lib2: mul everything else case
+lib1: div 1 and 2
+curr: div true and false
+lib2: mod 1&2 case
+lib1: mod [3 4]
+lib1: mod [1 2 3]
+lib1: mod [true false]
+
+
+Running "2 then 1" tests
+lib2: add 1 and 2
+lib2: add true and false
+lib2: sub 1 and 2
+lib1: sub true and false
+lib2: mul 1&2 case
+lib2: mul everything else case
+lib1: div 1 and 2
+curr: div true and false
+lib2: mod 1&2 case
+lib2: mod 3 and 4
+lib1: mod [1 2 3]
+lib2: mod true and false

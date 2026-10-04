@@ -1,0 +1,362 @@
+
+
+;; ----- Helpers -----
+
+;; A Variable is a String
+def (is_var x) (is_str x)
+
+def (write `[lambda [,x] ,e])
+  "[lambda [" + (write x) + "] " + (write e) + "]"
+
+def (= `[lambda [,x1] ,e1] `[lambda [,x2] ,e2])
+  (& (= x1 x2) (= e1 e2))
+
+def (list_remove [] elm) []
+def (list_remove [x rest ...] elm)
+  if (= x elm)
+     (list_remove rest elm)
+     [x] + (list_remove rest elm)
+
+def (deduplicate []) []
+def (deduplicate [x rest ...])
+  if (is_member rest x)
+     (deduplicate rest)
+     [x] + (deduplicate rest)
+
+def (list_union lst1 lst2)
+  (deduplicate (+ lst1 lst2))
+def (list_union lst lsts ...)
+  (list_union lst (list_union lsts ...))
+
+def (is_member [] elm) false
+def (is_member [x rest ...] elm)
+  if (= x elm)
+     true
+     (is_member rest elm)
+
+;; (ListOf Element) -> (or Element false)
+def (element_or_false lst)
+  if (is_empty lst)
+     false
+     (first lst)
+
+;; Association list
+def (make_alist xs ...) `[alist ,xs ...]
+
+def (alist_set `[alist ,xs ...] key value)
+  (make_alist
+    (map (lambda (x)
+          {
+            let [k v] x
+            if (= key k)
+              [k value]
+              x
+          })
+        xs) ...)
+
+def (alist_has_key `[alist] key) false
+def (alist_has_key `[alist ,x ,xs ...] key)
+  let [k v] x
+  if (= key k)
+     true
+     (alist_has_key `[alist ,xs ...] key) ;; Q: Can we make sure that this unnessesary object allocation is automatically optimized away?
+
+def (alist_ref `[alist] key) none
+def (alist_ref `[alist ,x ,xs ...] key)
+  let [k v] x
+  if (= key k)
+     v
+     (alist_ref `[alist ,xs ...] key)
+
+def (write `[alist ,xs ...]) "`[alist " + (write xs) + "]"
+
+;; ----- Main -----
+
+def (trace exp order) (trace exp order {2 ^ 12})
+def (trace exp "AOE" max_steps) (take_steps exp step_AOE max_steps)
+def (trace exp "NOE" max_steps) (take_steps exp step_NOE max_steps)
+def (trace exp "CBV" max_steps) (take_steps exp step_CBV max_steps)
+def (trace exp "CBN" max_steps) (take_steps exp step_CBN max_steps)
+
+;; Expr Function Int -> (ListOf Expr)
+def (take_steps exp take_step max_steps)
+  if (= max_steps 0) false
+
+  let next (take_step exp)
+  if (not next) [exp]
+
+  let res (take_steps next take_step (- max_steps 1))
+  if res
+     (+ [exp] res)
+     false
+
+;; Return the number of terms in the full subgraph of reachable
+;; equivalent terms not above the max height:
+def (count_equiv_terms exp max_height)
+  let equiv_terms (find_equiv_terms [exp] max_height)
+  (slice_len equiv_terms)
+
+;; ----- Step Methods for Trace -----
+
+;; Expr -> (or false Expr)
+def (step_AOE `[lambda [,x] ,e])
+  ;; Look for beta redex under lambda
+  let result (step_AOE e)
+  if result
+     `[lambda ,[x] ,result]
+     false
+def (step_AOE exp=[ef ea])
+  ;; Look down right, then left, then the whole application
+  let try_down_right (step_AOE ea)
+  if try_down_right [ef try_down_right]
+
+  let try_down_left (step_AOE ef)
+  if try_down_left [try_down_left ea]
+
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  false
+def (step_AOE (? x is_var)) false
+
+;; Expr -> (or false Expr)
+def (step_NOE `[lambda [,x] ,e])
+  ;; Look for beta redex under lambda
+  let result (step_NOE e)
+  if result
+     `[lambda ,[x] ,result]
+     false
+def (step_NOE exp=[ef ea])
+  ;; Look at the whole application, then down left, then right
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  let try_down_left (step_NOE ef)
+  if try_down_left [try_down_left ea]
+
+  let try_down_right (step_NOE ea)
+  if try_down_right [ef try_down_right]
+
+  false
+def (step_NOE (? x is_var)) false
+
+;; Expr -> (or false Expr)
+def (step_CBV `[lambda [,x] ,e]) false ;; Don't reduce under lambda
+def (step_CBV exp=[ef ea])
+  ;; Look down right, then left, then the whole application
+  let try_down_right (step_CBV ea)
+  if try_down_right [ef try_down_right]
+
+  let try_down_left (step_CBV ef)
+  if try_down_left [try_down_left ea]
+
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  false
+def (step_CBV (? x is_var)) false
+
+;; Expr -> (or false Expr)
+def (step_CBN `[lambda [,x] ,e]) false ;; Don't reduce under lambda
+def (step_CBN exp=[ef ea])
+  ;; Look at the whole application, then down left, then right
+  if (is_beta_redex exp) (element_or_false (beta_reduce exp))
+
+  let try_down_left (step_CBN ef)
+  if try_down_left [try_down_left ea]
+
+  let try_down_right (step_CBN ea)
+  if try_down_right [ef try_down_right]
+
+  false
+def (step_CBN (? x is_var)) false
+
+
+;; ----- Count Equiv Terms Helpers -----
+
+;; (ListOf Expr) Int -> (ListOf Expr)
+def (find_equiv_terms exps max_height)
+  def (find_TC total_exps new_exps operation)
+    ;; Find all next steps from new_exps
+    let derived_exps
+      (deduplicate
+        (foldl (lambda (exp exps)
+                  (+ (alphatize_list (operation exp)) exps))
+               [] new_exps))
+
+    ;; Remove terms over max_height
+    let filtered_derived_exps
+      (filter (lambda (x) (<= (term_height x) max_height)) derived_exps)
+
+    let all_exps (list_union total_exps filtered_derived_exps)
+
+    if (= (slice_len total_exps)
+          (slice_len all_exps))
+      ;; Reached fix point (no more new derived expressions)
+      total_exps
+
+      ;; Not yet at fix point
+      (find_TC all_exps filtered_derived_exps operation)
+  
+  let alphatized (alphatize_list exps)
+
+  ;; take all possible beta and eta reduce steps first
+  let reduced_exps (find_TC alphatized alphatized take_all_reduce_steps)
+
+  ;; then take all possible eta steps
+  (find_TC reduced_exps reduced_exps take_all_eta_expand_steps)
+
+def (take_all_eta_expand_steps exp)
+  (list_union
+    (eta_expand exp)
+    (take_on_sub_exprs exp take_all_eta_expand_steps))
+
+def (take_all_reduce_steps exp)
+  (list_union
+    (eta_reduce exp)
+    (beta_reduce exp)
+    (take_on_sub_exprs exp take_all_reduce_steps))
+
+def (take_on_sub_exprs `[lambda [,x] ,e] op)
+  (map (lambda (e) `[lambda ,[x] ,e])
+        (op e))
+def (take_on_sub_exprs [ef ea] op)
+  (list_union
+    (map (lambda (ef) [ef ea])
+          (op ef))
+    (map (lambda (ea) [ef ea])
+          (op ea)))
+def (take_on_sub_exprs x op) []
+
+def (is_alpha_equiv exp1 exp2)
+  (= (alphatize exp1) (alphatize exp2))
+
+def (alphatize_list []) []
+def (alphatize_list [exp exps ...])
+  [(alphatize exp) (alphatize_list exps) ...]
+
+def (alphatize exp) (alphatize exp (lambda () (default_sym_generator "x")))
+def (alphatize exp sym_generator)
+  def (alpha `[lambda [,x] ,e] env)
+    let new_sym (sym_generator)
+    `[lambda ,[new_sym] ,(alpha e (alist_set env x new_sym))]
+  def (alpha [ef ea] env) [(alpha ef env) (alpha ea env)]
+  def (alpha x env)
+    if (alist_has_key env x)
+       (alist_ref env x)
+       x
+
+  (alpha exp (make_alist))
+
+def (term_height `[lambda [,x] ,eb]) 1 + (term_height eb)
+def (term_height [ef ea]) 1 + (max (term_height ef) (term_height ea))
+def (term_height x) 0
+
+def (default_sym_generator str)
+  (+ str "0")
+
+;; ----- Reduction and Substitution Helpers -----
+
+def (free (? x is_var)) [x]
+def (free `[lambda [,x] ,eb]) (list_remove (free eb) x)
+def (free [ef ea]) (list_union (free ef) (free ea))
+
+;; Expr Variable Expr -> (or Expr false)
+;; Implements capture-avoiding substitution. Returns false if substitution
+;; failed because of a problamatic free variable in ea (i.e. an alpha-renaming
+;; needs to be done), unless force_alpha is set to true (then the required alpha-renaming
+;; will automatically be done).
+def (subst exp x ea) (subst exp x ea false)
+def (subst exp x ea force_alpha)
+  let free_vars_ea (free ea)
+
+  def (recur (? y is_var)) when (= x y)
+    ea
+  def (recur (? y is_var)) y
+  def (recur `[lambda [,y] ,e]) when (= x y)
+    `[lambda ,[y] ,e]
+  def (recur `[lambda [,y] ,e]) when (is_member free_vars_ea y)
+    if force_alpha
+       (recur (element_or_false (alpha_convert exp)))
+       false
+  def (recur `[lambda [,y] ,e])
+    let e_new (recur e)
+    if e_new
+       `[lambda ,[y] ,e_new]
+       false
+  def (recur [e1 e2])
+    let e1_new (recur e1)
+    let e2_new (recur e2)
+    if (& e1_new e2_new)
+       [e1_new e2_new]
+       false
+
+  (recur exp)
+
+def (alpha_convert exp) (alpha_convert exp default_sym_generator)
+def (alpha_convert `[lambda [,x] ,eb] sym_generator)
+  let x_new (sym_generator x)
+  [`[lambda ,[x_new] ,(subst eb x x_new)]]
+def (alpha_convert exp sym_generator) []
+
+def (is_beta_redex [`[lambda [,x] ,eb] ea]) true
+def (is_beta_redex exp) false
+
+;; Expr Boolean -> (ListOf Expr)
+def (beta_reduce exp) (beta_reduce exp true)
+def (beta_reduce [`[lambda [,x] ,eb] ea] force_alpha)
+  let eb_new (subst eb x ea force_alpha)
+  if eb_new
+     [eb_new]
+     []
+def (beta_reduce exp force_alpha) []
+
+;; Expr -> (ListOf Expr)
+def (eta_reduce `[lambda [,x] [,ef ,x]]) when (not (is_member (free ef) x))
+  [ef]
+def (eta_reduce _) []
+
+;; Expr -> (NonEmptyListOf Expr)
+def (eta_expand exp)
+  let x (default_sym_generator "x12345")
+  [`[lambda ,[x] ,[exp x]]]
+
+def (main)
+{
+  def (lam param_lst body) `[lambda ,param_lst ,body]
+
+  let a "a"
+  let b "b"
+  let c "c"
+  let d "d"
+  let e "e"
+  let f "f"
+  let x "x"
+  let y "y"
+  let z "z"
+
+  let p1 [[(lam [a] a) (lam [b] b)]
+          [(lam [c] c) (lam [d] d)]]
+  let p2 (lam [z]
+            [[(lam [a] a) (lam [b] b)]
+             [(lam [c] c) (lam [d] d)]])
+  let p3 [(lam [x] (lam [y] x)) y]
+  let p4 [(lam [x] (lam [y] y))
+	        [(lam [z] [z z]) (lam [z] [z z])]]
+  let p5 [(lam [a] [a a])
+	        [(lam [c] (lam [d] d))
+		       [(lam [e] [e e]) (lam [f] [f f])]]]
+
+  {
+    (debug_print (write (lam ["g"] "g")))
+
+    ;; trace
+    (debug_print (write (trace p1 "AOE")))
+    (debug_print (write (trace p2 "AOE")))
+    (debug_print (write (trace p3 "NOE")))
+    (debug_print (write (trace p4 "CBV"))) ;; Expect false (i.e. it loops forever)
+    (debug_print (write (trace p4 "CBN")))
+
+    ;; count_equiv_terms
+    (debug_print (write (count_equiv_terms `[lambda ,[x] ,[x x]] 5))) ;; 8
+    (debug_print (write (count_equiv_terms `[lambda ,[x] ,x] 5))) ;; 14
+    (debug_print (write (count_equiv_terms p5 6))) ;; Should be 948 (but instead its 521)
+  }
+}

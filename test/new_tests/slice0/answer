@@ -1,0 +1,21 @@
+is_empty:
+true
+false
+false
+false
+true
+false
+Concatenation (+):
+[]
+[1 2 3]
+[1 2 3]
+[1 2 3 1 2 3]
+[]
+is_slice:
+true
+true
+true
+true
+false
+false
+false

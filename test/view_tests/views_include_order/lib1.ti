@@ -1,0 +1,15 @@
+
+def (add x y)
+  "lib1: add " + (write x) + " and " + (write y)
+
+def (sub x y)
+  "lib1: sub " + (write x) + " and " + (write y)
+
+def (mul (? x int) (? y int))
+  "lib1: mul " + (write x) + " and " + (write y)
+
+def (div (? x int) (? y int))
+  "lib1: div " + (write x) + " and " + (write y)
+
+def (mod x ...)
+  "lib1: mod " + (write x)

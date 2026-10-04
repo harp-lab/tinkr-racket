@@ -1,6 +1,6 @@
 
 
-
+include "debug.ti"
 
 include "clang.ti"
 include "stack.ti"
@@ -11,6 +11,8 @@ include "int.ti"
 include "seq.ti"
 include "slice.ti"
 include "bool.ti"
+include "begin.ti"
+include "lib.ti"
 
 
 include "main.ti"
@@ -22,6 +24,9 @@ include "main.ti"
 
 let none = `[none]
 let _noarg = `[_noarg]
+
+;; A compiler internal value that indicates when a pattern match has failed (returned from an inner loop).
+let _fail = `[_fail]
 
 def x = y false
 
@@ -61,12 +66,38 @@ blessed (get_object_tag x)
 blessed (get_object_slice x)
   ;; obj is tagged 001, slices 010
   (cond (bit_or (eq 0 (deref (plus 1 (anys_t (top61 x)))))
-		(eq 255 (u64bit_and 255
-				    (deref (plus 1 (anys_t (top61 x)))))))
-	_empty
-	(u64plus 2 (plus 1 (anys_t (top61 x)))))
+                (eq 255 (u64bit_and 255
+                                    (deref (plus 1 (anys_t (top61 x)))))))
+        _empty
+        (u64plus 2 (plus 1 (anys_t (top61 x)))))
+
+;; MutableObject UntaggedInt Slice -> UntaggedInt
+;; Initalizes the given object `mut_obj` with the values in `vals`.
+;; Returns an updated index.
+blessed (init_obj_from_slice mut_obj curr_i vals)
+{
+  if (eq vals _empty)
+  {
+    return curr_i
+  }
+  {
+    val = (deref (anys_t (top61 vals)))
+    if (u64bit_or (eq 0 val) (eq 255 (u64bit_and 255 val)))
+    {
+      return curr_i
+    }
+    {
+      do (init_obj mut_obj curr_i val)
+
+      the_rest = (plus (anys_t (top61 vals)) 1)
+      new_i = (plus (u64_t curr_i) 1)
+      return (init_obj_from_slice mut_obj new_i the_rest)
+    }
+  }
+}
 
 
+;; (or FunPtr Closure) Slice ->
 ;; Runtime trampoline for dynamically spliced function calls
 def (_apply f args)
   if (= args empty) (f)
@@ -86,43 +117,116 @@ def (_apply f args)
   let r3 = (rest r2)
   if (= r3 empty) (f a0 a1 a2 a3)
   
-  let a4 = (first r3)
-  let r4 = (rest r3)
-  if (= r4 empty) (f a0 a1 a2 a3 a4)
-  
-  let a5 = (first r4)
-  let r5 = (rest r4)
-  if (= r5 empty) (f a0 a1 a2 a3 a4 a5)
-  
-  (raw_apply f a0 a1 a2 a3 a4 a5 r5)
+  ;; Need to call __apply__ since f could be a closure
+  ;; Stop at 6 args to __apply__ (plus fallback and arg_count to make 8 total)
+  ;; Arg count offest of -1 since __apply__ should only includes f's arguments in it's arg count
+  (raw_apply __apply__ (bless (minus 0 1)) f a0 a1 a2 a3 r3)
 
+;; FunPtr CInt Any Any Any Any Any Slice ->
 ;; Bypasses desugar auto-slicing to invoke a function pointer directly via C++ ABI
-blessed (_raw__apply f a0 a1 a2 a3 a4 a5 r5)
+;; This blessed function has a special exception in desugar and limit-def-params which
+;; allows it to take 8 args.
+blessed (_raw__apply f arg_count_offset a0 a1 a2 a3 a4 r4)
+{
+  r4_ptr = (anys_t (top61 r4))
+  r4_length = (_slice_len r4_ptr)
+  arg_count = (plus (plus 5 (u64_t r4_length)) (u64_t arg_count_offset))
+
+  ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, (any)$1, $2, $3, $4, $5, $6, $7)" f arg_count a0 a1 a2 a3 a4 r4)
+  return 0
+}
+
+;; FunPtr Slice ->
+blessed (_apply_on_slice f arg_count arg0 arg1 arg2 arg3 rest_args)
 {
   ;; We cast 0 to (any)0 to satisfy Clang's strict musttail type-matching rules
-  do ("tailcall ((blessed_t)$0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f a0 a1 a2 a3 a4 a5 r5)
+  if (bl_slice_empty rest_args)
+  {
+    do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 _u__noarg _u__noarg)
+    return 0
+  }
+  {
+    a0 = (bl_slice_first rest_args)
+    r0 = (bl_slice_rest rest_args)
+    if (bl_slice_empty r0)
+    {
+      do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 a0 _u__noarg)
+      return 0
+    }
+    {
+      do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, (any)0, $1, $2, $3, $4, $5, $6, $7)" f arg_count arg0 arg1 arg2 arg3 a0 r0)
+      return 0
+    }
+  }
+}
+
+;; FunPtr FunPtr Slice ->
+;; Similar to _apply except it applies f with a fallback
+def (_apply_with_fallback f fallback args)
+  if (= args empty) (raw_apply_with_fallback f fallback (bless 0))
+  let a0 = (first args)
+  let r0 = (rest args)
+  if (= r0 empty) (raw_apply_with_fallback f fallback (bless 1) a0)
+  
+  let a1 = (first r0)
+  let r1 = (rest r0)
+  if (= r1 empty) (raw_apply_with_fallback f fallback (bless 2) a0 a1)
+  
+  let a2 = (first r1)
+  let r2 = (rest r1)
+  if (= r2 empty) (raw_apply_with_fallback f fallback (bless 3) a0 a1 a2)
+  
+  let a3 = (first r2)
+  let r3 = (rest r2)
+  if (= r3 empty) (raw_apply_with_fallback f fallback (bless 4) a0 a1 a2 a3)
+  
+  (raw_apply_with_fallback_full f fallback a0 a1 a2 a3 r3)
+
+;; Two helpers (similar to _raw__apply) to apply f with a fallback argument
+;; Both of these helpers have special exceptions inside the desugar and limit def params phases
+;; to prevent a slice being passed for the last argument.
+
+;; With arg_count and no rest slice
+blessed (_raw__apply__with__fallback f fallback arg_count a0 a1 a2 a3)
+{
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, $1, (any)$2, $3, $4, $5, $6, $7, $8)" 
+                                                              f fallback arg_count a0 a1 a2 a3 _u__noarg _u__noarg) 
+  return 0
+}
+
+;; We have a rest slice r3 which must be non-empty
+blessed (_raw__apply__with__fallback__full f fallback a0 a1 a2 a3 r3)
+{
+  r4_ptr = (any_t (plus (anys_t (top61 r3)) 1)) ;; get rest (r4)
+  r4_length = (_slice_len r4_ptr)
+  r4_slice = (u64bit_or 2 r4_ptr) ;; Retag as a slice
+
+  do ("tailcall any_to_blessed($0)(alloc_fr, alloc_bk, stack_fr, $1, (any)((u64)5 + (u64)$2), $3, $4, $5, $6, $7, (any)$8)" 
+                                                              f fallback r4_length a0 a1 a2 a3
+                                                              (deref (anys_t (top61 r3))) ;; get first (a4)
+                                                              r4_slice) 
   return 0
 }
 
 
 ;; Runtime gatherer for dynamically building vararg slices from registers
-def (_gather a0 a1 a2 a3 a4 a5 a6)
+def (_gather a0 a1 a2 a3 a4 a5)
   let base_slice = 
-    if (bless (equal a3 _noarg))
-      ;; Length is between 0 and 3
+    if (bless (equal a2 _noarg))
+      ;; Length is between 0 and 2
       if (bless (equal a0 _noarg)) empty
       if (bless (equal a1 _noarg)) [a0]
-      if (bless (equal a2 _noarg)) [a0 a1]
-      [a0 a1 a2]
-    ;; Length is between 4 and 6
+      [a0 a1]
+    ;; Length is between 3 and 5
+    if (bless (equal a3 _noarg)) [a0 a1 a2]
     if (bless (equal a4 _noarg)) [a0 a1 a2 a3]
-    if (bless (equal a5 _noarg)) [a0 a1 a2 a3 a4]
-    [a0 a1 a2 a3 a4 a5]
+    [a0 a1 a2 a3 a4]
   
-  ;; Always treat a6 as variadic
-  if (bless (equal a6 _noarg))
+  ;; Always treat a5 as variadic
+  if (bless (equal a5 _noarg))
     base_slice
-    base_slice + a6
+    (_slice_concat base_slice a5)
 
 ;; Vtable lookup and dispatch
 blessed (vtable_lookup arg0 pos)
@@ -161,11 +265,3 @@ blessed (fail_locally fallback a0 a1 a2 a3 a4 a5 a6)
   fb1 = (plus (manys_t fallback) 1)
   return (fun fb1 a0 a1 a2 a3 a4 a5 a6)
 }
-
-
-
-
-
-
-
-

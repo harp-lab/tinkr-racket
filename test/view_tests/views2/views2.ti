@@ -1,0 +1,9 @@
+include "lib.ti" [except helper]
+
+def (helper x) x + 2000
+
+def (main)
+{
+  (debug_print (write (stuff 5)))
+  (debug_print (write (helper 5)))
+}

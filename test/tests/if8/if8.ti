@@ -1,0 +1,6 @@
+def (foo)
+    `pr <- if 1 300 400
+
+def (main)
+    let a # `pr (foo)
+    (debug_print (write a))

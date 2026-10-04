@@ -1,0 +1,3 @@
+def (helper x) x + 1000
+
+def (stuff x) (helper x)

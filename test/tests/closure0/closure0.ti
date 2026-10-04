@@ -1,0 +1,7 @@
+def (main)
+    let x 20   
+    let z 10
+    let w 100
+    let foo (lambda (x y) x + y + w + z)
+    let a (foo z (let z 5 z))
+    (debug_print (write a))

@@ -1,0 +1,14 @@
+
+def (foo false)
+  "false"
+def (foo true)
+  "true"
+def (foo x)
+  "other"
+
+def (main)
+{
+  (debug_print (write (foo false)))
+  (debug_print (write (foo true)))
+  (debug_print (write (foo 1)))
+}

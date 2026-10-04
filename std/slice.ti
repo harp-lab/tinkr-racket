@@ -3,6 +3,7 @@
 ;; Printing
 
 
+def (write ,empty) "[]"
 def (write x=`[_slice ,_])  { "[" + (write_slice x) } + "]"
 def (write_slice x)
   let rst = (rest x)
@@ -38,26 +39,40 @@ blessed (slice_rest ptr)
       return (u64plus 2 ptr1)
 }
 
+def (is_empty ,empty) true
+def (is_empty `[_slice ,ptr]) false
+
+def (is_slice ,empty) true
+def (is_slice `[_slice ,ptr]) true
+def (is_slice x) false
 
 ;; Concatenation
 
-def (+ `[_slice ,s1] `[_slice ,s2])
-  let n1 = (bless (slice_len s1))
-  let n2 = (bless (slice_len s2))
-    (bless (slice_concat s1 n1 s2 n2))
+;; TODO: If dispatch fails then this will produce an error with _slice_concat instead of + (which is undesirable).
+;;       Howerver, this stratification needs to be done otherwise problems arise with the k-ary version of +.
+def (_slice_concat `[_slice ,s1] `[_slice ,s2])
+  let n1 = (bless (_slice_len s1))
+  let n2 = (bless (_slice_len s2))
+  (bless (slice_concat s1 n1 s2 n2))
+def (_slice_concat ,empty x=`[_slice ,_]) x
+def (_slice_concat x=`[_slice ,_] ,empty) x
+def (_slice_concat ,empty ,empty) empty
 
-def (+ ,empty x) x
-def (+ x=`[_slice ,_] ,empty) x
+def (+ x=`[_slice ,_] y) (_slice_concat x y)
+def (+ ,empty y) (_slice_concat empty y)
 
+def (slice_len ,empty) 0
+def (slice_len `[_slice ,s])
+  (_init_from_s64 none (bless (_slice_len s)))
 
-blessed (slice_len ptr)
+blessed (_slice_len ptr)
 {
   val = (deref (anys_t ptr))
   ;; Terminate on 0 (uninitialized) or 255 (next object header)
   if (u64bit_or (eq 0 val) (eq 255 (u64bit_and 255 val)))
     return 0
     {
-      a = (slice_len (plus 1 (anys_t ptr)))
+      a = (_slice_len (plus 1 (anys_t ptr)))
       return (s64plus 1 a)
     }
 }

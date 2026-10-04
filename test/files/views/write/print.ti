@@ -1,0 +1,4 @@
+include "write.ti"
+
+def (print x)
+	(debug_print "Printing: " + (new_write x))

@@ -1,0 +1,4 @@
+def (main)
+  def (h 1) 11
+
+  (debug_print (write (h 1)))

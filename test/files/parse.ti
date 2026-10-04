@@ -1,0 +1,6 @@
+
+def (do_stuff f)
+  (f 1 2)
+
+def (main)
+  (debug_print (write (do_stuff +)))

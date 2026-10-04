@@ -1,0 +1,3 @@
+def (main)
+    let a (prim_hash_set {} 1 "abc")
+    (debug_print (write a))

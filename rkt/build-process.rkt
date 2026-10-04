@@ -2,21 +2,46 @@
 
 (provide spawn-compile-one
          compile-all-parallel
-	 all-deps-have-reached?
-	 compile-headers
-	 compile-cpp-to-object
-	 link-and-build-bin
-	 build-error-chan
-	 run-cmd)
+         all-deps-have-reached?
+         compile-headers
+         compile-cpp-to-object
+         link-and-build-bin
+         build-error-chan
+         run-cmd
+         set-options!
+         (struct-out build-options))
 
-(require "utils.rkt"
+
+(require "utils/utils.rkt"
 	 racket/system
 	 racket/hash
-	 racket/runtime-path)
+   racket/runtime-path
+   racket/string)
 
+
+(struct build-options
+  [debug?
+   separate-logs?
+   lto?
+   opt?
+   no-strict-aliasing?
+   show-flags?
+   print-cmds?
+   c-compiler-flags
+   c-linker-flags]
+  #:transparent)
+
+;; A helper human-readable tag for the error file produced
+;; by run-cmd. Can be set!ed before calling run-cmd.
+(define error-file-tag "")
+
+(define options #f)
+(define (set-options! opts)
+  (set! options opts))
 
 (define null-device-path
   (if (eq? (system-type) 'windows) "NUL" "/dev/null"))
+
 
 
 ;; Channel to catch and bubble up thread crashes
@@ -30,7 +55,7 @@
        (thunk)))))
 
 ;; Spins up a new process to handle a small set of files/X folders 
-(define (spawn-compile-one folder-names)
+(define (spawn-compile-one folder-names separate-logs)
   (spawn-safe
    (lambda ()
      (define rkt-path 
@@ -46,6 +71,8 @@
 			     (format "(compile-one \"~a\")" name))
 			   folder-names))))
      
+     (when separate-logs
+      (set! error-file-tag (car folder-names))) ; Seperates the error files by thread if enabled
      (run-cmd (find-executable-path "racket") "-e" cmd))))
 
 
@@ -95,22 +122,28 @@
     #:exists 'append))
 
 
-(define (compile-all-parallel)
-  (define files-root "/tmp/ti/files")
-  (define build-root "/tmp/ti/build")
-  (when (directory-exists? files-root)
-    (define dirlst (directory-list files-root #:build? #f))
-    (define groups ;; Subfolders can be handled in parallel
-      (let ([i 0]) ;; Put into 7 partitions:
-	(group-by (λ (_) (begin0 i (set! i (modulo (add1 i) 7))))
-		  dirlst))) ;; Spin up 7 worker processes:
-    (for/list ([group (in-list groups)])
-	      (spawn-compile-one group))))
+;; Compiles only the modules of the given build (its symlinked subdirs) —
+;; NOT everything ever cached under /tmp/ti/files: a stale or broken source
+;; elsewhere in the cache must not affect (or slow down) unrelated builds.
+(define (compile-all-parallel project [separate-logs #f])
+  (define dirlst
+    (for/list ([entry (in-list (directory-list project))]
+               #:when (directory-exists? (build-path project entry)))
+      entry))
+  (define groups ;; Subfolders can be handled in parallel
+    (let ([i 0]) ;; Put into 7 partitions:
+      (group-by (λ (_) (begin0 i (set! i (modulo (add1 i) 7))))
+                dirlst))) ;; Spin up 7 worker processes:
+  (for/list ([group (in-list groups)])
+            (spawn-compile-one group separate-logs)))
 
 
 (define (run-cmd prog . args)
+  (when (build-options-print-cmds? options)
+    (displayln (format "~a ~a" prog (string-join args " "))))
+  
   (define log-port (open-output-file
-		    (build-path "/tmp/ti/error.log")
+        (build-path (format "/tmp/ti/error~a.log" error-file-tag))
 		    #:exists 'append))
   (define stdin-port (open-input-file null-device-path))
   (define-values (sp out in err)
@@ -121,22 +154,44 @@
   (unless (zero? (subprocess-status sp))
     (error (format "Build command failed: ~a ~a" prog args))))
 
+;; Finds the path to a C++ compiler. Returns a tuple containing both the
+;; type of compiler (clang++ or c++) and path.
+(define (find-cxx-path)
+  (define clang-attempt (find-executable-path "clang++"))
+  (cond
+    [clang-attempt `(clang++ ,clang-attempt)]
+    [else
+      (define c++-attempt (find-executable-path "c++"))
+      (unless c++-attempt (error "Error: neither clang++ nor c++ not found in PATH."))
+      `(c++ ,c++-attempt)]))
 
 (define (compile-cpp-to-object cpp-path header-path obj-path)
   (spawn-safe
    (lambda ()
-     (define cxx-path (or (find-executable-path "clang++") 
-			  (find-executable-path "c++")))
-     (unless cxx-path (error "Error: clang++ not found in PATH."))
-     (run-cmd cxx-path
-              "-c" cpp-path
-              "-o" obj-path
-              "-include" header-path 
-              "-std=c++20"
-	      "-g"  "-DDEBUG"
-              "-march=native"
-              "-flto=thin" 
-              "-ferror-limit=3")
+     (match-define `(,cxx-type ,cxx-path) (find-cxx-path))
+     (define clang? (equal? cxx-type 'clang++))
+
+     (define compile-flags
+       (append
+         (list "-g" "-march=native" "-w")
+         (if clang? (list "-ferror-limit=3") (list "-fmax-errors=3"))
+         (if (and (build-options-lto? options) clang?) (list "-flto=thin") '())
+         (if (build-options-opt? options) (list "-O2") '())
+         (if (build-options-no-strict-aliasing? options) (list "-fno-strict-aliasing") '())
+         (if (build-options-debug? options) (list "-DDEBUG") '())
+         (build-options-c-compiler-flags options)))
+     
+     (when (build-options-show-flags? options)
+       (displayln (format "CXX compile flags: ~a" compile-flags)))
+
+     (apply run-cmd
+            (append
+              (list cxx-path
+                "-c" cpp-path
+                "-o" obj-path
+                "-include" header-path
+                "-std=c++20")
+              compile-flags))
      ;; Copy the .o file into the build folder using the hashed dir name
      (copy-file obj-path
         (match (explode-path obj-path)
@@ -154,17 +209,27 @@
     (for/list ([f (in-list (directory-list project-path))]
                #:when (path-has-extension? f ".o"))
       (path->string (build-path project-path f))))
+
   ;; Todo: more carefully check all .o files compiled successfully?
   (when (null? obj-files)
     (error (format "No .o files found in ~a" project-path)))
+
+  (define link-flags
+    (append
+        (if (build-options-lto? options)
+            (list "-lgc" "-lgmp" "-flto=thin" "-fuse-ld=lld")
+            (list "-lgc" "-lgmp"))
+        (if (build-options-opt? options) (list "-O2") '())
+        (if (build-options-no-strict-aliasing? options) (list "-fno-strict-aliasing") '())
+        (build-options-c-linker-flags options)
+        (list "-o" out-path)))
+  
+  (when (build-options-show-flags? options)
+    (displayln (format "CXX link flags: ~a" link-flags)))
+
   (apply run-cmd
-	 cxx-path
-	 "-lgc"
-	 "-lgmp"
-	 "-flto=thin"
-	 "-fuse-ld=lld"
-         "-o" out-path
-	 obj-files))
+         cxx-path
+         (append link-flags obj-files)))
 
 
 (define (link-and-build-bin project-path)

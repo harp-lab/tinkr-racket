@@ -1,0 +1,10 @@
+include "collections.ti" [as concat]
+include "math.ti" [as num]
+include "big_num.ti"
+include "ordered_set.ti"
+
+def (main)
+  let v (map (lambda (x) (num.* x (make_big 999999)))
+             (concat.+ [1 2 3 4] (make_ord_set 1 2 3 4)))
+
+  (debug_print (write v))

@@ -1,0 +1,31 @@
+
+;; Ellipsis
+def (add x y)
+  x + y
+def (add x xs ...)
+  x + (add xs ...)
+
+;; Constant patterns
+def (is_empty [])
+  true
+def (is_empty xs)
+  false
+
+def (is_5 5)
+  true
+def (is_5 x)
+  false
+
+;; Ellipsis with objects
+def (to_slice `[line ,all ...])
+  [all ...]
+
+def (main)
+{
+  (debug_print (write (add 1 2 3 4 5)))
+  (debug_print (write (is_empty [])))
+  (debug_print (write (is_empty [1 2 3])))
+  (debug_print (write (is_5 5)))
+  (debug_print (write (is_5 6)))
+  (debug_print (write (to_slice `[line 5 6 7 8])))
+}

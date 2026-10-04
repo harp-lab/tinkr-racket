@@ -1,0 +1,37 @@
+def (main)
+    let p0 (prim_prompt 98)
+    let p1 (prim_prompt 99)
+    let p (prim_prompt 97)
+    let t 2
+    let foo (lambda () p1 <- 5)
+    let b # p0
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    let a # p1
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    # p
+    let a # p (foo)
+    (-> a + t) + 1
+    p0 <- 3;
+    a
+    let b (-> 2)
+    (debug_print (write b))

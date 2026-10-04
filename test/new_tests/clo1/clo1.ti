@@ -1,0 +1,23 @@
+
+def (apply fun arg)
+  (fun arg)
+
+def (f)
+  def (fact 0) 1
+  def (fact 1) 1
+  def (fact n) n * (fact n-1)
+
+  {
+    (debug_print (write (fact 0)))
+    (debug_print (write (fact 1)))
+    (debug_print (write (fact 2)))
+    (debug_print (write (fact 3)))
+    (debug_print (write (fact 4)))
+    (debug_print (write (fact 5)))
+    (debug_print (write (fact 6)))
+    (debug_print (write (fact 7)))
+    (debug_print (write (apply fact 8)))
+  }
+
+def (main)
+  (f)

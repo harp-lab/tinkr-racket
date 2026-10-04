@@ -1,0 +1,4 @@
+def (main)
+    let a [1 2 3]
+    let b (rest a)
+    (debug_print (write b))

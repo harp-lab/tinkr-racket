@@ -1,0 +1,10 @@
+include "b8.ti" [rename f g]
+
+def (g 1) 101
+
+def (main)
+{
+  (debug_print (write (g 1)))
+  (debug_print (write (g 2)))
+  (debug_print (write (g 3)))
+}

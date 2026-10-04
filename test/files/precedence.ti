@@ -1,0 +1,5 @@
+
+def (equ5 xs=5 ...) ;; Potential issue: The ... gets grouped with the 5 (= xs (... 5)) rather than the whole pattern (... (= xs 5))
+  xs
+def (equ5 xs ...)
+  false

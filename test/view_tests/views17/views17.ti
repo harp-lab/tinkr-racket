@@ -1,0 +1,11 @@
+include "lib17.ti"
+include "lib17.ti" [as M]
+
+def (foo x) 5
+
+def (main)
+{
+  (debug_print (write (foo 9)))
+  (debug_print (write (foo 1 2)))
+  (debug_print (write (M.foo 9)))
+}

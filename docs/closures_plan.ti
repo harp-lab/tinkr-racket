@@ -1,0 +1,134 @@
+
+def (g x y z)
+  (+ x y z)
+
+def (f x y)
+  def (g z)
+    (+ x y z)
+  def (g z a)
+    (+ x y z a)
+  
+  {
+    (debug_print (write (g 3)))     ;; 6
+    (debug_print (write (g 3 4)))   ;; 10
+    (debug_print (write (g 3 4 5))) ;; 12
+  }
+
+def (main)
+  (f 1 2)
+
+;; ----- Desugar ----->
+
+def (g fallback arg-count x y z)
+  if (= arg-count 3)
+    (+ x y z)
+    ;; fail
+
+def (f fallback arg-count x y)
+  def (g1 fallback arg-count z) (fail_to g2)
+    let g g1
+      if (= arg-count 1)
+        (+ x y z)
+        (fail)
+  def (g2 fallback arg-count z a) (fail_to g3)
+    let g g1
+      if (= arg-count 2)
+        (+ x y z a)
+        (fail)
+  def (g3 fallback arg-count args_rest ...)
+    (_apply none 2 g args_rest) ;; NOTE: the _apply here is not the same as the apply in closure conversion (I need to think of a better way to differentiate the two)
+  
+  let g g1
+
+  {
+    (debug_print none 1 (write none 1 (g none 1 3)))
+    (debug_print none 1 (write none 1 (g none 2 3 4)))
+    (debug_print none 1 (write none 1 (g none 3 3 4 5)))
+  }
+
+;; ----- Alpha convert
+
+;; ----- Do lambda/inner-def lifting here eventually ----->
+
+...
+
+;; ----- Closure convert ----->
+
+def (g fallback arg-count x y z)
+  if (= arg-count 3)
+    ;; (+ x y z)
+    ;; fail
+
+def (apply1 fallback arg-count clo z) (fail_to g2)
+  ;; unpack clo
+    if (= arg-count 1)
+      ;; (+ x y z)
+      (fail)
+
+def (g2 fallback arg-count clo z a) (fail_to g3)
+  ;; unpack clo
+    if (= arg-count 2)
+      ;; (+ x y z a)
+      (fail)
+
+def (g3 fallback arg-count clo args_rest ...)
+  (_apply none 2 g args_rest)
+
+def (f fallback arg-count x y)
+  ;; If g1 is recursive then will need to create a recursive closure (similarly if we have mutually recursive inner-defs)
+  ;; This new closures form allows the creation of recursive closures.
+  (closures ((g1 (object clo1 g g2 x y)))
+    {
+      (debug_print none 1 (write none 1 (apply none 1 g1 3)))
+      (debug_print none 1 (write none 1 (apply none 2 g1 3 4)))
+      (debug_print none 1 (write none 1 (apply none 3 g1 3 4 5)))
+    })
+
+def (apply_fun_ptr fallback arg-count func args ...)
+  ;; In order to prevent this from going into an infinite loop (since _apply will currently make a call to apply_fun_ptr once compiled), I will need
+  ;; to either create a blessed version of _apply (which assumes that func must be a function ptr and not a closure) or I will need to
+  ;; just inline the body code of _apply here directly. 
+  (_apply none 2 func args)
+
+;; Add to the method map:
+;;   ((apply . clo1) . apply1)
+;;   ((apply . #f) . apply_fun_ptr)
+
+;; ----- Limit def params ----->
+
+def (g fallback arg-count x y z pad1 pad2 pad3)
+  if (= arg-count 3)
+    ;; (+ x y z)
+    ;; fail
+
+def (apply1 fallback arg-count clo z pad1 pad2 pad3 pad4) (fail_to g2)
+  ;; unpack clo
+    if (= arg-count 1)
+      ;; (+ x y z)
+      (g2 fallback arg-count clo z pad1 pad2 pad3 pad4)
+
+def (g2 fallback arg-count clo z a pad1 pad2 pad3) (fail_to g3)
+  ;; unpack clo
+    if (= arg-count 2)
+      ;; (+ x y z a)
+      (g3 fallback arg-count clo z a pad1 pad2 pad3)
+
+def (g3 fallback arg-count clo args_rest_gather1 args_rest_gather2 args_rest_gather3 args_rest_gather4 args_rest_rest)
+  ;; This introduces an inefficiency because of the gathering followed directly by ungathering (i.e. _apply), but otherwise it should work
+  let args_rest (gather fallback 6 args_rest_gather1 args_rest_gather2 args_rest_gather3 args_rest_gather4 _noarg [args_rest_rest])
+    (_apply none 2 g args_rest)
+
+def (f fallback arg-count x y pad1 pad2 pad3 pad4)
+  ;; ...
+
+def (apply_fun_ptr fallback arg-count func args_gather1 args_gather2 args_gather3 args_gather4 args_rest)
+  let args (gather fallback 6 args_gather1 args_gather2 args_gather3 args_gather4 _noarg [args_rest])
+    (_apply none 2 func args)
+
+;; ANF
+;; CPS
+;; Blessed:
+
+;; Lowering the closures here.
+
+;; ...

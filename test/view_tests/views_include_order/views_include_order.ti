@@ -1,0 +1,13 @@
+include "lib1_then_lib2.ti"
+include "lib2_then_lib1.ti"
+
+def (main)
+{
+  (debug_print "Running \"1 then 2\" tests")
+  (run_tests_1_then_2)
+
+  (debug_print "\n")
+
+  (debug_print "Running \"2 then 1\" tests")
+  (run_tests_2_then_1)
+}

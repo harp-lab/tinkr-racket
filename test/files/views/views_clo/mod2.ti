@@ -1,0 +1,5 @@
+def (f x y z)
+	z
+
+def (g x y)
+	y

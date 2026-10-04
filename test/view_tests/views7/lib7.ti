@@ -1,0 +1,3 @@
+def (keep x) 10
+def (f x) 20
+def (drop x) 30

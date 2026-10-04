@@ -1,0 +1,6 @@
+
+def (+ x y)
+  ;; add x and y
+
+def (* x n)
+  ;; use +
